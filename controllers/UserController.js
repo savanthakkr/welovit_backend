@@ -47,12 +47,13 @@ exports.userPhoneVerify = async (req, res) => {
         const otp = await utility.generateOtp(constants.vals.optLength);
         const hashedOtp = await bcrypt.hash(otp, 10);
 
-        // Clear old OTP
+        // Remove previous OTP
         await dbQuery.deleteRecord(constants.vals.defaultDB, "user_otp", `user_id=${userId}`);
 
-        // Expiry
+        // Expiry Time
         const nowLocal = moment.tz(req.locals.now, "YYYY-MM-DD HH:mm:ss", constants.vals.tz);
-        const expiresAt = nowLocal.add(constants.vals.otpExpireMinutes, "minutes")
+        const expiresAt = nowLocal
+            .add(constants.vals.otpExpireMinutes, "minutes")
             .format("YYYY-MM-DD HH:mm:ss");
 
         await dbQuery.insertSingle(constants.vals.defaultDB, "user_otp", {
@@ -63,13 +64,15 @@ exports.userPhoneVerify = async (req, res) => {
 
         console.log("Login OTP:", otp);
 
-        
         // ----------------------------------------------------------------
-        // ✔ Final Response
+        // ✔ Return OTP also in Postman response
         // ----------------------------------------------------------------
         response.status = "success";
         response.msg = "OTP sent successfully.";
-        response.data = { user_id: userId };
+        response.data = { 
+            user_id: userId,
+            otp: otp     // <-- RETURN OTP HERE
+        };
 
         return utility.apiResponse(req, res, response);
 
@@ -78,6 +81,7 @@ exports.userPhoneVerify = async (req, res) => {
         throw err;
     }
 };
+
 
 
 
@@ -235,7 +239,7 @@ exports.userResendOtp = async (req, res) => {
 
         response.status = 'success';
         response.msg = "OTP resent successfully.";
-        response.data = { user_id: userId };
+        response.data = { user_id: userId, otp: otp  };
 
         return utility.apiResponse(req, res, response);
 
@@ -345,7 +349,7 @@ exports.userRegister = async (req, res) => {
         return utility.apiResponse(req, res, {
             status: "success",
             msg: "OTP sent successfully.",
-            data: { user_id: userId, my_referral_code: myRefCode }
+            data: { user_id: userId, my_referral_code: myRefCode, otp: otp  }
         });
 
     } catch (err) {
