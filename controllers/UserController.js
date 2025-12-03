@@ -63,36 +63,7 @@ exports.userPhoneVerify = async (req, res) => {
 
         console.log("Login OTP:", otp);
 
-        // ----------------------------------------------------------------
-        // 🚀 SEND OTP via Fast2SMS WITHOUT DLT (Transactional Route v3)
-        // ----------------------------------------------------------------
-        const smsData = {
-            route: "v3",
-            sender_id: "TXTIND",
-            message: `Your login OTP is ${otp}`,
-            language: "english",
-            flash: 0,
-            numbers: bodyData.user_Mobile.toString()
-        };
-
-        try {
-            const smsResponse = await axios.post(
-                "https://www.fast2sms.com/dev/bulkV2",
-                smsData,
-                {
-                    headers: {
-                        authorization: "JnLQfNPxWrXjTFyB3RdkiOZUVhvmcaC8DI2M4owuY6H0E9sqGpX8lOPibjyHSdwETZ4vq1GFgsMQKRxa",
-                        "Content-Type": "application/json"
-                    }
-                }
-            );
-
-            console.log("Fast2SMS Response:", smsResponse.data);
-
-        } catch (err) {
-            console.error("SMS sending failed:", err.response?.data || err);
-        }
-
+        
         // ----------------------------------------------------------------
         // ✔ Final Response
         // ----------------------------------------------------------------
@@ -1776,6 +1747,567 @@ exports.withdrawWallet = async (req, res) => {
         throw err;
     }
 };
+
+// // list product
+// exports.listProduct = async (req, res) => {
+//     try {
+//         let response = { status: "error", msg: "" };
+//         let body = req?.body?.inputdata || {};
+//         let admin = req?.userInfo;
+
+//         let page = parseInt(body.page) || 1;
+//         let limit = parseInt(body.limit) || 10;
+//         let offset = (page - 1) * limit;
+
+//         let where = `WHERE p.status = 1`;
+
+//         if (admin.admin_Type === "admin") {
+//             where += ` AND p.admin_id=${admin.admin_Id}`;
+//         }
+
+//         if (body.category_id) {
+//             where += ` AND p.category_id=${body.category_id}`;
+//         }
+
+//         if (body.sub_category_id) {
+//             where += ` AND p.sub_category_id=${body.sub_category_id}`;
+//         }
+
+//         // ⭐ FINAL QUERY
+//         const sql = `
+//             SELECT 
+//                 p.product_id,
+//                 p.product_name,
+//                 p.product_slug,
+//                 p.product_description,
+//                 p.product_base_price,
+//                 p.product_sale_price,
+//                 p.product_tags,
+//                 p.product_review,
+//                 p.created_at,
+//                 c.category_Name,
+//                 sc.sub_Category_Name,
+
+//                 -- ⭐ GROUP ATTRIBUTES
+//                 JSON_ARRAYAGG(
+//                     JSON_OBJECT(
+//                         'attribute_id', pav.attribute_id,
+//                         'attribute_name', att.name,
+//                         'values',
+//                         (
+//                             SELECT JSON_ARRAYAGG(val.value)
+//                             FROM product_attribute_values pav2
+//                             JOIN attribute_values val ON pav2.value_id = val.value_id
+//                             WHERE pav2.product_id = p.product_id
+//                             AND pav2.attribute_id = pav.attribute_id
+//                         )
+//                     )
+//                 ) AS product_attributes
+
+//             FROM products AS p
+//             LEFT JOIN categories AS c ON p.category_id = c.category_id
+//             LEFT JOIN sub_categories AS sc ON p.sub_category_id = sc.sub_category_id
+//             LEFT JOIN product_attribute_values pav ON pav.product_id = p.product_id
+//             LEFT JOIN attributes att ON att.attribute_id = pav.attribute_id
+
+//             ${where}
+//             GROUP BY p.product_id
+//             ORDER BY p.product_id DESC
+//             LIMIT ${limit} OFFSET ${offset}
+//         `;
+
+//         const list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
+
+//         // ⭐ COUNT QUERY
+//         const countQuery = `
+//             SELECT COUNT(*) AS total
+//             FROM products AS p
+//             ${where}
+//         `;
+
+//         const countData = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
+
+//         response.status = "success";
+//         response.msg = "Product list fetched.";
+//         response.data = {
+//             list,
+//             pagination: {
+//                 page,
+//                 limit,
+//                 total: countData[0]?.total || 0
+//             }
+//         };
+
+//         return utility.apiResponse(req, res, response);
+
+//     } catch (err) {
+//         throw err;
+//     }
+// };
+
+
+exports.userAllProducts = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        let page = parseInt(body.page) || 1;
+        let limit = parseInt(body.limit) || 20;
+        let offset = (page - 1) * limit;
+
+        let where = `WHERE p.status = 1`;
+
+        if (body.category_id) where += ` AND p.category_id=${body.category_id}`;
+        if (body.sub_category_id) where += ` AND p.sub_category_id=${body.sub_category_id}`;
+
+        // MAIN PRODUCT QUERY
+        const products = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                p.product_id,
+                p.product_name,
+                p.product_slug,
+                p.product_description,
+                p.product_base_price,
+                p.product_sale_price,
+                p.product_tags,
+                p.product_review,
+                p.created_at,
+                c.category_Name,
+                sc.sub_Category_Name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.category_id
+            LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
+            ${where}
+            ORDER BY p.product_id DESC
+            LIMIT ${limit} OFFSET ${offset}
+            `
+        );
+
+        // ENRICH EACH PRODUCT
+        for (let p of products) {
+            
+            // IMAGES
+            const images = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `SELECT imageUrl FROM product_images WHERE product_id=${p.product_id}`
+            );
+            p.images = images.map(i => i.imageUrl);
+
+            // ATTRIBUTES
+            const attributesRaw = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `
+                SELECT 
+                    pav.attribute_id,
+                    a.name AS attribute_name,
+                    v.value
+                FROM product_attribute_values pav
+                JOIN attributes a ON pav.attribute_id = a.attribute_id
+                JOIN attribute_values v ON pav.value_id = v.value_id
+                WHERE pav.product_id = ${p.product_id}
+                `
+            );
+
+            // GROUP attributes manually
+            const grouped = {};
+            for (let row of attributesRaw) {
+                if (!grouped[row.attribute_id]) {
+                    grouped[row.attribute_id] = {
+                        attribute_id: row.attribute_id,
+                        attribute_name: row.attribute_name,
+                        values: []
+                    };
+                }
+                grouped[row.attribute_id].values.push(row.value);
+            }
+            p.attributes = Object.values(grouped);
+        }
+
+        // COUNT
+        const count = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `SELECT COUNT(*) AS total FROM products p ${where}`
+        );
+
+        response.status = "success";
+        response.msg = "All products fetched.";
+        response.data = {
+            products,
+            pagination: {
+                page,
+                limit,
+                total: count[0]?.total || 0
+            }
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        throw err;
+    }
+};
+
+
+
+
+exports.userHomeProductList = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+
+        // ============================
+        // ⭐ FETCH FEATURED PRODUCTS
+        // ============================
+        const featured = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                p.product_id,
+                p.product_name,
+                p.product_slug,
+                p.product_description,
+                p.product_base_price,
+                p.product_sale_price,
+                p.product_tags,
+                p.product_review,
+                p.created_at,
+                c.category_Name,
+                sc.sub_Category_Name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.category_id
+            LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
+            WHERE p.status = 1
+            ORDER BY p.product_id DESC
+            LIMIT 10
+            `
+        );
+
+        // ============================
+        // ⭐ FETCH BEST SELLING PRODUCTS
+        // ============================
+        const bestSelling = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                p.product_id,
+                p.product_name,
+                p.product_sale_price,
+                COUNT(c.product_Id) AS total_sold
+            FROM user_carts c
+            JOIN products p ON p.product_id = c.product_Id
+            WHERE c.status = 'ordered'
+            GROUP BY c.product_Id
+            ORDER BY total_sold DESC
+            LIMIT 10
+            `
+        );
+
+        // ============================
+        // ⭐ ENRICH BOTH LISTS
+        // ============================
+        const enrichProduct = async (p) => {
+
+            // IMAGES
+            const images = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `SELECT imageUrl FROM product_images WHERE product_id=${p.product_id}`
+            );
+            p.images = images.map(i => i.imageUrl);
+
+            // ATTRIBUTES
+            const attrRows = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `
+                SELECT pav.attribute_id, a.name AS attribute_name, v.value
+                FROM product_attribute_values pav
+                JOIN attributes a ON pav.attribute_id = a.attribute_id
+                JOIN attribute_values v ON pav.value_id = v.value_id
+                WHERE pav.product_id = ${p.product_id}
+                `
+            );
+
+            const grouped = {};
+            for (let row of attrRows) {
+                if (!grouped[row.attribute_id]) {
+                    grouped[row.attribute_id] = {
+                        attribute_id: row.attribute_id,
+                        attribute_name: row.attribute_name,
+                        values: []
+                    };
+                }
+                grouped[row.attribute_id].values.push(row.value);
+            }
+
+            p.attributes = Object.values(grouped);
+        };
+
+        // Enrich featured
+        for (let p of featured) { await enrichProduct(p); }
+
+        // Enrich best selling
+        for (let p of bestSelling) { await enrichProduct(p); }
+
+        // ============================
+        // ⭐ FINAL RESPONSE
+        // ============================
+        response.status = "success";
+        response.msg = "Featured & Best Selling products fetched.";
+        response.data = {
+            featured_products: featured,
+            best_selling_products: bestSelling
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        console.error(err);
+        throw err;
+    }
+};
+
+exports.userFilterProducts = async (req, res) => {
+    try {
+        let body = req.body.inputdata || {};
+        let { 
+            category_id, 
+            sub_category_id, 
+            min_price, 
+            max_price, 
+            attributes = [],
+            page = 1, 
+            limit = 20 
+        } = body;
+
+        let offset = (page - 1) * limit;
+
+        let where = `WHERE p.status = 1`;
+
+        if (category_id) where += ` AND p.category_id = ${category_id}`;
+        if (sub_category_id) where += ` AND p.sub_category_id = ${sub_category_id}`;
+        if (min_price) where += ` AND p.product_sale_price >= ${min_price}`;
+        if (max_price) where += ` AND p.product_sale_price <= ${max_price}`;
+
+        // main safe query
+        const productList = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                p.product_id,
+                p.product_name,
+                p.product_slug,
+                p.product_description,
+                p.product_base_price,
+                p.product_sale_price,
+                p.product_review,
+                p.product_tags,
+                p.created_at,
+                c.category_Name,
+                sc.sub_Category_Name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.category_id
+            LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
+            ${where}
+            ORDER BY p.product_id DESC
+            LIMIT ${limit} OFFSET ${offset}
+            `
+        );
+
+        // Fetch images & attributes per product
+        for (let p of productList) {
+            const images = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `SELECT imageUrl FROM product_images WHERE product_id=${p.product_id}`
+            );
+            p.images = images.map(i => i.imageUrl);
+
+            const attrRows = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `
+                SELECT pav.attribute_id, a.name AS attribute_name, v.value
+                FROM product_attribute_values pav
+                JOIN attributes a ON pav.attribute_id = a.attribute_id
+                JOIN attribute_values v ON pav.value_id = v.value_id
+                WHERE pav.product_id = ${p.product_id}
+                `
+            );
+
+            let grouped = {};
+            for (let row of attrRows) {
+                if (!grouped[row.attribute_id]) {
+                    grouped[row.attribute_id] = {
+                        attribute_id: row.attribute_id,
+                        attribute_name: row.attribute_name,
+                        values: []
+                    };
+                }
+                grouped[row.attribute_id].values.push(row.value);
+            }
+
+            p.attributes = Object.values(grouped);
+        }
+
+        return utility.apiResponse(req, res, {
+            status: "success",
+            msg: "Filtered products fetched.",
+            data: productList
+        });
+
+    } catch (err) {
+        console.error(err);
+        throw err;
+    }
+};
+
+
+
+
+// CATEGORY: LIST WITH PAGINATION
+exports.userListCategory = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
+
+        page = parseInt(page);
+        limit = parseInt(limit);
+        const offset = (page - 1) * limit;
+
+        // USER view → no admin filter
+        let where = "WHERE is_delete = 0";
+
+        // -----------------------------------------
+        // MAIN LIST QUERY
+        // -----------------------------------------
+        const listQuery = `
+            SELECT 
+                category_id,
+                category_Name,
+                category_Slug,
+                created_at
+            FROM categories
+            ${where}
+            ORDER BY category_id DESC
+            LIMIT ${limit} OFFSET ${offset}
+        `;
+
+        const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
+
+        // -----------------------------------------
+        // COUNT TOTAL
+        // -----------------------------------------
+        const countQuery = `
+            SELECT COUNT(*) AS total
+            FROM categories
+            ${where}
+        `;
+
+        const totalData = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
+
+        response.status = "success";
+        response.msg = "Category list fetched successfully.";
+        response.data = {
+            list,
+            pagination: {
+                page,
+                limit,
+                total: totalData?.[0]?.total || 0
+            }
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        console.error(err);
+        throw err;
+    }
+};
+
+
+exports.userListSubCategory = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
+
+        page = parseInt(page);
+        limit = parseInt(limit);
+        const offset = (page - 1) * limit;
+
+        // USER → no admin filter
+        let where = "WHERE sc.is_delete = 0";
+
+        const listQuery = `
+            SELECT 
+                sc.sub_category_id,
+                sc.category_Id,
+                sc.sub_Category_Name,
+                sc.sub_Category_Slug,
+                sc.created_at,
+                c.category_Name
+            FROM sub_categories AS sc
+            LEFT JOIN categories AS c ON sc.category_Id = c.category_id
+            ${where}
+            ORDER BY sc.sub_category_id DESC
+            LIMIT ${limit} OFFSET ${offset}
+        `;
+
+        const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
+
+        const countQuery = `
+            SELECT COUNT(*) AS total
+            FROM sub_categories
+            WHERE is_delete = 0
+        `;
+
+        const totalResult = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
+        const total = totalResult?.[0]?.total || 0;
+
+        response.status = "success";
+        response.msg = "Sub category list fetched.";
+        response.data = {
+            list,
+            pagination: {
+                page,
+                limit,
+                total
+            }
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        throw err;
+    }
+};
+
+
+exports.userListSubCategoryByCategoryId = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata;
+
+        if (!body.category_Id) {
+            response.msg = "Category ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        const condition = `WHERE category_Id=${body.category_Id} AND is_delete=0`;
+
+        const list = await dbQuery.fetchRecords(
+            constants.vals.defaultDB,
+            "sub_categories",
+            `${condition} ORDER BY sub_category_id DESC`,
+            "sub_category_id, sub_Category_Name, sub_Category_Slug"
+        );
+
+        response.status = "success";
+        response.msg = "Sub category list fetched.";
+        response.data = list;
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) { throw err; }
+};
+
 
 
 

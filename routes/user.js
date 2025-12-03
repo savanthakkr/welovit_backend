@@ -1,6 +1,6 @@
 var express = require("express");
 var apiMiddleware = require("../middlewares/api");
-const { userRegister,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPinVerify, userPhoneVerify, userForgetPin, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, getOtpLength, getDistrictList, getCityList, offlineData, userOtpVerify, userResendOtp } = require("../controllers/UserController");
+const { userRegister,userListCategory,userFilterProducts,userListSubCategoryByCategoryId,userListSubCategory,userHomeProductList,userAllProducts,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPinVerify, userPhoneVerify, userForgetPin, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, getOtpLength, getDistrictList, getCityList, offlineData, userOtpVerify, userResendOtp } = require("../controllers/UserController");
 const { authentication } = require('../middlewares/authentication');
 const FileManager = require("../helpers/file_manager");
 
@@ -20,6 +20,26 @@ app.use("/register", apiMiddleware, userRegister);
 
 // User register route
 app.use("/add_address", apiMiddleware, authentication, addUserAddress);
+
+
+
+// list product
+app.use("/list_product", apiMiddleware, authentication, userAllProducts);
+
+// list userHomeProductList
+app.use("/user_home_product", apiMiddleware, authentication, userHomeProductList);
+
+// list userFilterProducts
+app.use("/user_filter", apiMiddleware, authentication, userFilterProducts);
+
+// list category
+app.use("/list_category", apiMiddleware, authentication, userListCategory);
+
+// list userListSubCategory
+app.use("/list_sub_category", apiMiddleware, authentication, userListSubCategory);
+
+// list userListSubCategoryByCategoryId
+app.use("/list_sub_category_by_category_id", apiMiddleware, authentication, userListSubCategoryByCategoryId);
 
 //
 app.use("/add_cart", apiMiddleware, authentication, addToCart);

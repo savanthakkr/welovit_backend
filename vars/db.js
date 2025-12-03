@@ -9,11 +9,11 @@ exports.dbs = {
 exports.dbs_login = {
     apiservice: {
         user: 'root',
-        password: 'Asd@@11!!dg#22#'
+        password: 'pAssW1@!1!!123'
     }
 };
 
-
+// Asd@@11!!dg#22#
 exports.mongodbs = {
     
     // mysql_dine_server_common: {
