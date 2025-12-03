@@ -1988,7 +1988,7 @@ exports.userHomeProductList = async (req, res) => {
         );
 
         // ============================
-        // ⭐ FETCH BEST SELLING PRODUCTS
+        // ⭐ FETCH BEST SELLING PRODUCTS (FULL DETAILS)
         // ============================
         const bestSelling = await dbQuery.rawQuery(
             constants.vals.defaultDB,
@@ -1996,22 +1996,31 @@ exports.userHomeProductList = async (req, res) => {
             SELECT 
                 p.product_id,
                 p.product_name,
+                p.product_slug,
+                p.product_description,
+                p.product_base_price,
                 p.product_sale_price,
-                COUNT(c.product_Id) AS total_sold
-            FROM user_carts c
-            JOIN products p ON p.product_id = c.product_Id
-            WHERE c.status = 'ordered'
-            GROUP BY c.product_Id
+                p.product_tags,
+                p.product_review,
+                p.created_at,
+                c.category_Name,
+                sc.sub_Category_Name,
+                COUNT(carts.product_Id) AS total_sold
+            FROM user_carts carts
+            JOIN products p ON p.product_id = carts.product_Id
+            LEFT JOIN categories c ON p.category_id = c.category_id
+            LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
+            WHERE carts.status = 'ordered'
+            GROUP BY carts.product_Id
             ORDER BY total_sold DESC
             LIMIT 10
             `
         );
 
         // ============================
-        // ⭐ ENRICH BOTH LISTS
+        // ⭐ ENRICH PRODUCT FUNCTION
         // ============================
         const enrichProduct = async (p) => {
-
             // IMAGES
             const images = await dbQuery.rawQuery(
                 constants.vals.defaultDB,
@@ -2046,11 +2055,11 @@ exports.userHomeProductList = async (req, res) => {
             p.attributes = Object.values(grouped);
         };
 
-        // Enrich featured
-        for (let p of featured) { await enrichProduct(p); }
+        // ENRICH featured products
+        for (let p of featured) await enrichProduct(p);
 
-        // Enrich best selling
-        for (let p of bestSelling) { await enrichProduct(p); }
+        // ENRICH best selling products
+        for (let p of bestSelling) await enrichProduct(p);
 
         // ============================
         // ⭐ FINAL RESPONSE
@@ -2069,6 +2078,7 @@ exports.userHomeProductList = async (req, res) => {
         throw err;
     }
 };
+
 
 exports.userFilterProducts = async (req, res) => {
     try {
