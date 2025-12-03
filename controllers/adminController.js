@@ -1497,7 +1497,7 @@ exports.listProduct = async (req, res) => {
             where += ` AND p.sub_category_id=${body.sub_category_id}`;
         }
 
-        // ⭐ FINAL QUERY
+        // ⭐ FINAL QUERY INCLUDING available_quantity
         const sql = `
             SELECT 
                 p.product_id,
@@ -1506,6 +1506,7 @@ exports.listProduct = async (req, res) => {
                 p.product_description,
                 p.product_base_price,
                 p.product_sale_price,
+                p.available_quantity,
                 p.product_tags,
                 p.product_review,
                 p.created_at,
@@ -1540,7 +1541,26 @@ exports.listProduct = async (req, res) => {
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-        const list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
+        let list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
+
+        // ⭐ ADD REVIEW SUMMARY FOR EACH PRODUCT
+        for (let p of list) {
+            const reviewSummary = await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `
+                SELECT 
+                    AVG(review) AS avg_rating,
+                    COUNT(*) AS total_reviews
+                FROM product_reviews
+                WHERE product_id = ${p.product_id}
+                `
+            );
+
+            p.review_summary = {
+                avg_rating: parseFloat(reviewSummary[0]?.avg_rating || 0).toFixed(1),
+                total_reviews: reviewSummary[0]?.total_reviews || 0
+            };
+        }
 
         // ⭐ COUNT QUERY
         const countQuery = `
@@ -1568,6 +1588,8 @@ exports.listProduct = async (req, res) => {
         throw err;
     }
 };
+
+
 
 
 

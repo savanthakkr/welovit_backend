@@ -2201,6 +2201,110 @@ exports.userFilterProducts = async (req, res) => {
     }
 };
 
+exports.userAddProductReview = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let user = req.userInfo;
+        let body = req.body.inputdata;
+
+        if (!body.product_id) {
+            response.msg = "Product ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        if (!body.review || body.review < 1 || body.review > 5) {
+            response.msg = "Review star must be between 1 to 5.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // Check if product exists
+        let product = await dbQuery.fetchSingleRecord(
+            constants.vals.defaultDB,
+            "products",
+            `WHERE product_id=${body.product_id} AND status=1`,
+            "product_id"
+        );
+
+        if (!product) {
+            response.msg = "Invalid product.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // ----------------------------------------------------------
+        // ⭐ CHECK USER HAS PURCHASED THIS PRODUCT
+        // ----------------------------------------------------------
+        const purchased = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT uo.order_id
+            FROM user_orders uo
+            JOIN user_carts uc ON uc.order_id = uo.order_id
+            WHERE uo.user_id = ${user.user_id}
+            AND uc.product_Id = ${body.product_id}
+            AND uo.order_status = 'delivered'
+            LIMIT 1
+            `
+        );
+
+        if (purchased.length === 0) {
+            response.msg = "You can review only purchased products.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // ----------------------------------------------------------
+        // ⭐ CHECK IF USER ALREADY REVIEWED — THEN UPDATE
+        // ----------------------------------------------------------
+        const existingReview = await dbQuery.fetchSingleRecord(
+            constants.vals.defaultDB,
+            "product_reviews",
+            `WHERE user_id=${user.user_id} AND product_id=${body.product_id}`,
+            "review_id"
+        );
+
+        if (existingReview) {
+            // UPDATE
+            await dbQuery.updateRecord(
+                constants.vals.defaultDB,
+                "product_reviews",
+                {
+                    review: body.review,
+                    comment: body.comment || "",
+                    updated_at: req.locals.now
+                },
+                `review_id=${existingReview.review_id}`
+            );
+
+            response.status = "success";
+            response.msg = "Review updated successfully.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // ----------------------------------------------------------
+        // ⭐ INSERT NEW REVIEW
+        // ----------------------------------------------------------
+        const insertId = await dbQuery.insertSingle(
+            constants.vals.defaultDB,
+            "product_reviews",
+            {
+                user_id: user.user_id,
+                product_id: body.product_id,
+                review: body.review,
+                comment: body.comment || "",
+                created_at: req.locals.now
+            }
+        );
+
+        response.status = "success";
+        response.msg = "Review added successfully.";
+        response.data = { review_id: insertId };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        console.error(err);
+        throw err;
+    }
+};
 
 
 
