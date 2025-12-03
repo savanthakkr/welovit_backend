@@ -910,12 +910,7 @@ exports.deleteCategory = async (req, res) => {
 exports.listCategory = async (req, res) => {
     try {
         let response = { status: "error", msg: "" };
-        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
         let admin = req?.userInfo;
-
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
 
         let where = "WHERE c.is_delete = 0";
 
@@ -924,9 +919,6 @@ exports.listCategory = async (req, res) => {
             where += ` AND c.admin_Id = ${admin.admin_Id}`;
         }
 
-        // -----------------------------------------
-        // MAIN LIST QUERY
-        // -----------------------------------------
         const listQuery = `
             SELECT 
                 c.category_id,
@@ -939,36 +931,13 @@ exports.listCategory = async (req, res) => {
             LEFT JOIN admins AS a ON c.admin_Id = a.admin_Id
             ${where}
             ORDER BY c.category_id DESC
-            LIMIT ${limit} OFFSET ${offset}
         `;
 
         const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
 
-        // -----------------------------------------
-        // COUNT (no alias in table name)
-        // -----------------------------------------
-        const whereCount = where.replace(/c\./g, "");
-
-        const totalData = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `SELECT COUNT(*) AS total FROM categories ${whereCount}`
-        );
-
-        let totalRows = totalData?.[0]?.total || 0;
-
-        // -----------------------------------------
-        // RESPONSE
-        // -----------------------------------------
         response.status = "success";
         response.msg = "Category list fetched.";
-        response.data = {
-            list,
-            pagination: {
-                page,
-                limit,
-                total: totalRows
-            }
-        };
+        response.data = list;
 
         return utility.apiResponse(req, res, response);
 
@@ -976,6 +945,7 @@ exports.listCategory = async (req, res) => {
         throw err;
     }
 };
+
 
 
 
@@ -1140,25 +1110,15 @@ exports.deleteSubCategory = async (req, res) => {
 exports.listSubCategory = async (req, res) => {
     try {
         let response = { status: "error", msg: "" };
-        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
         let adminInfo = req?.userInfo;
 
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
-
-        // -------------------------------------------------
-        // WHERE CONDITION (Admin-wise access)
-        // -------------------------------------------------
         let where = "WHERE sc.is_delete = 0";
 
+        // Admin-wise restriction
         if (adminInfo.admin_Type === "admin") {
             where += ` AND sc.admin_Id = ${adminInfo.admin_Id}`;
         }
 
-        // -------------------------------------------------
-        // LIST QUERY
-        // -------------------------------------------------
         const listQuery = `
             SELECT 
                 sc.sub_category_id,
@@ -1174,38 +1134,13 @@ exports.listSubCategory = async (req, res) => {
             LEFT JOIN admins AS a ON sc.admin_Id = a.admin_Id
             ${where}
             ORDER BY sc.sub_category_id DESC
-            LIMIT ${limit} OFFSET ${offset}
         `;
 
         const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
 
-        // -------------------------------------------------
-        // COUNT QUERY (No alias usage)
-        // -------------------------------------------------
-        let whereCount = where.replace(/sc\./g, "");
-
-        const countQuery = `
-            SELECT COUNT(*) AS total
-            FROM sub_categories
-            ${whereCount}
-        `;
-
-        const totalResult = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
-        const totalRows = totalResult?.[0]?.total || 0;
-
-        // -------------------------------------------------
-        // RESPONSE
-        // -------------------------------------------------
         response.status = "success";
         response.msg = "Sub category list fetched successfully.";
-        response.data = {
-            list,
-            pagination: {
-                page,
-                limit,
-                total: totalRows
-            }
-        };
+        response.data = list;
 
         return utility.apiResponse(req, res, response);
 
@@ -1213,6 +1148,7 @@ exports.listSubCategory = async (req, res) => {
         throw err;
     }
 };
+
 
 
 

@@ -2180,18 +2180,10 @@ exports.userFilterProducts = async (req, res) => {
 exports.userListCategory = async (req, res) => {
     try {
         let response = { status: "error", msg: "" };
-        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
-
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
 
         // USER view → no admin filter
         let where = "WHERE is_delete = 0";
 
-        // -----------------------------------------
-        // MAIN LIST QUERY
-        // -----------------------------------------
         const listQuery = `
             SELECT 
                 category_id,
@@ -2201,32 +2193,13 @@ exports.userListCategory = async (req, res) => {
             FROM categories
             ${where}
             ORDER BY category_id DESC
-            LIMIT ${limit} OFFSET ${offset}
         `;
 
         const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
 
-        // -----------------------------------------
-        // COUNT TOTAL
-        // -----------------------------------------
-        const countQuery = `
-            SELECT COUNT(*) AS total
-            FROM categories
-            ${where}
-        `;
-
-        const totalData = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
-
         response.status = "success";
         response.msg = "Category list fetched successfully.";
-        response.data = {
-            list,
-            pagination: {
-                page,
-                limit,
-                total: totalData?.[0]?.total || 0
-            }
-        };
+        response.data = list;
 
         return utility.apiResponse(req, res, response);
 
@@ -2237,16 +2210,11 @@ exports.userListCategory = async (req, res) => {
 };
 
 
+
 exports.userListSubCategory = async (req, res) => {
     try {
         let response = { status: "error", msg: "" };
-        let { page = 1, limit = 10 } = req?.body?.inputdata || {};
 
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
-
-        // USER → no admin filter
         let where = "WHERE sc.is_delete = 0";
 
         const listQuery = `
@@ -2261,37 +2229,22 @@ exports.userListSubCategory = async (req, res) => {
             LEFT JOIN categories AS c ON sc.category_Id = c.category_id
             ${where}
             ORDER BY sc.sub_category_id DESC
-            LIMIT ${limit} OFFSET ${offset}
         `;
 
         const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
 
-        const countQuery = `
-            SELECT COUNT(*) AS total
-            FROM sub_categories
-            WHERE is_delete = 0
-        `;
-
-        const totalResult = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
-        const total = totalResult?.[0]?.total || 0;
-
         response.status = "success";
-        response.msg = "Sub category list fetched.";
-        response.data = {
-            list,
-            pagination: {
-                page,
-                limit,
-                total
-            }
-        };
+        response.msg = "Sub category list fetched successfully.";
+        response.data = list;
 
         return utility.apiResponse(req, res, response);
 
     } catch (err) {
+        console.error(err);
         throw err;
     }
 };
+
 
 
 exports.userListSubCategoryByCategoryId = async (req, res) => {
