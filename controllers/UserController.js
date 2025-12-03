@@ -2005,14 +2005,14 @@ exports.userHomeProductList = async (req, res) => {
             FROM products p
             LEFT JOIN categories c ON p.category_id = c.category_id
             LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
-            WHERE p.status = 1
+            WHERE p.status = 1 AND p.available_quantity > 0
             ORDER BY p.product_id DESC
             LIMIT 10
             `
         );
 
         // ============================
-        // ⭐ FETCH BEST SELLING PRODUCTS (FULL DETAILS)
+        // ⭐ FETCH BEST SELLING PRODUCTS
         // ============================
         const bestSelling = await dbQuery.rawQuery(
             constants.vals.defaultDB,
@@ -2035,6 +2035,8 @@ exports.userHomeProductList = async (req, res) => {
             LEFT JOIN categories c ON p.category_id = c.category_id
             LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
             WHERE carts.status = 'ordered'
+              AND p.status = 1          -- Active
+              AND p.available_quantity > 0  -- In stock
             GROUP BY carts.product_Id
             ORDER BY total_sold DESC
             LIMIT 10
@@ -2079,10 +2081,10 @@ exports.userHomeProductList = async (req, res) => {
             p.attributes = Object.values(grouped);
         };
 
-        // ENRICH featured products
+        // Enrich featured products
         for (let p of featured) await enrichProduct(p);
 
-        // ENRICH best selling products
+        // Enrich best selling
         for (let p of bestSelling) await enrichProduct(p);
 
         // ============================
@@ -2102,6 +2104,7 @@ exports.userHomeProductList = async (req, res) => {
         throw err;
     }
 };
+
 
 
 exports.userFilterProducts = async (req, res) => {

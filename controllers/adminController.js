@@ -1483,8 +1483,7 @@ exports.listProduct = async (req, res) => {
         let limit = parseInt(body.limit) || 10;
         let offset = (page - 1) * limit;
 
-        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
-
+        let where = `WHERE p.status = 1`;
 
         if (admin.admin_Type === "admin") {
             where += ` AND p.admin_id=${admin.admin_Id}`;
