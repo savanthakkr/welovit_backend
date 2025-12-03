@@ -1056,18 +1056,30 @@ exports.placeOrder = async (req, res) => {
             return utility.apiResponse(req, res, response);
         }
 
-        // Fetch cart
+        // Fetch cart with stock info
         let cartItems = await dbQuery.rawQuery(
             constants.vals.defaultDB,
-            `SELECT c.*, p.product_sale_price 
-             FROM user_carts c
-             JOIN products p ON c.product_Id = p.product_id
-             WHERE c.user_Id=${user.user_id} AND c.status='active'`
+            `
+            SELECT c.*, 
+                   p.product_sale_price, 
+                   p.available_quantity 
+            FROM user_carts c
+            JOIN products p ON c.product_Id = p.product_id
+            WHERE c.user_Id=${user.user_id} AND c.status='active'
+            `
         );
 
         if (!cartItems || cartItems.length === 0) {
             response.msg = "Cart is empty.";
             return utility.apiResponse(req, res, response);
+        }
+
+        // STOCK CHECK
+        for (let item of cartItems) {
+            if (item.product_Quantity > item.available_quantity) {
+                response.msg = `Insufficient stock for product ID ${item.product_Id}`;
+                return utility.apiResponse(req, res, response);
+            }
         }
 
         let originalAmount = 0;
@@ -1106,7 +1118,7 @@ exports.placeOrder = async (req, res) => {
             finalAmount += productTotal;
         }
 
-        // COUPON CALCULATION AFTER OFFERS
+        // COUPON
         let couponId = null;
         let couponDiscountAmount = 0;
 
@@ -1122,11 +1134,10 @@ exports.placeOrder = async (req, res) => {
                 couponId = coupon.coupon_id;
                 let couponDiscount = parseFloat(coupon.coupons_Discount) || 0;
 
-                if (coupon.coupons_Type === "percentage") {
+                if (coupon.coupons_Type === "percentage")
                     couponDiscountAmount = (finalAmount * couponDiscount) / 100;
-                } else {
+                else
                     couponDiscountAmount = couponDiscount;
-                }
 
                 finalAmount -= couponDiscountAmount;
             }
@@ -1153,6 +1164,18 @@ exports.placeOrder = async (req, res) => {
             }
         );
 
+        // REDUCE STOCK
+        for (let item of cartItems) {
+            await dbQuery.rawQuery(
+                constants.vals.defaultDB,
+                `
+                UPDATE products 
+                SET available_quantity = available_quantity - ${item.product_Quantity}
+                WHERE product_id = ${item.product_Id}
+                `
+            );
+        }
+
         return utility.apiResponse(req, res, {
             status: "success",
             msg: "Order placed successfully.",
@@ -1168,6 +1191,7 @@ exports.placeOrder = async (req, res) => {
         throw err;
     }
 };
+
 
 
 
@@ -1859,7 +1883,7 @@ exports.userAllProducts = async (req, res) => {
         let limit = parseInt(body.limit) || 20;
         let offset = (page - 1) * limit;
 
-        let where = `WHERE p.status = 1`;
+        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
 
         if (body.category_id) where += ` AND p.category_id=${body.category_id}`;
         if (body.sub_category_id) where += ` AND p.sub_category_id=${body.sub_category_id}`;
@@ -2095,7 +2119,8 @@ exports.userFilterProducts = async (req, res) => {
 
         let offset = (page - 1) * limit;
 
-        let where = `WHERE p.status = 1`;
+        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
+
 
         if (category_id) where += ` AND p.category_id = ${category_id}`;
         if (sub_category_id) where += ` AND p.sub_category_id = ${sub_category_id}`;

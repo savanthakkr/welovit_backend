@@ -1205,11 +1205,12 @@ exports.addProduct = async (req, res) => {
             category_id: "Category is required.",
             sub_category_id: "Sub category is required.",
             product_base_price: "Base price is required.",
-            product_sale_price: "Sale price is required."
+            product_sale_price: "Sale price is required.",
+            available_quantity: "Available quantity is required."
         };
 
         for (let key in messages) {
-            if (!body[key]) {
+            if (!body[key] && body[key] !== 0) {
                 response.msg = messages[key];
                 return utility.apiResponse(req, res, response);
             }
@@ -1259,8 +1260,6 @@ exports.addProduct = async (req, res) => {
             "product_id"
         );
 
-        
-
         if (Array.isArray(dupCheck) && dupCheck.length > 0) {
             response.msg = "Product already exists.";
             return utility.apiResponse(req, res, response);
@@ -1278,6 +1277,7 @@ exports.addProduct = async (req, res) => {
             product_description: body?.product_description || "",
             product_base_price: body.product_base_price,
             product_sale_price: body.product_sale_price,
+            available_quantity: body.available_quantity,   // 👈 NEW FIELD
             product_tags: body?.product_tags || "",
             created_at: req.locals.now
         };
@@ -1321,6 +1321,7 @@ exports.addProduct = async (req, res) => {
         throw err;
     }
 };
+
 
 
 
@@ -1482,7 +1483,8 @@ exports.listProduct = async (req, res) => {
         let limit = parseInt(body.limit) || 10;
         let offset = (page - 1) * limit;
 
-        let where = `WHERE p.status = 1`;
+        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
+
 
         if (admin.admin_Type === "admin") {
             where += ` AND p.admin_id=${admin.admin_Id}`;
