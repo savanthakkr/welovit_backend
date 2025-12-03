@@ -69,7 +69,7 @@ exports.userPhoneVerify = async (req, res) => {
         // ----------------------------------------------------------------
         response.status = "success";
         response.msg = "OTP sent successfully.";
-        response.data = { 
+        response.data = {
             user_id: userId,
             otp: otp     // <-- RETURN OTP HERE
         };
@@ -239,7 +239,7 @@ exports.userResendOtp = async (req, res) => {
 
         response.status = 'success';
         response.msg = "OTP resent successfully.";
-        response.data = { user_id: userId, otp: otp  };
+        response.data = { user_id: userId, otp: otp };
 
         return utility.apiResponse(req, res, response);
 
@@ -349,7 +349,7 @@ exports.userRegister = async (req, res) => {
         return utility.apiResponse(req, res, {
             status: "success",
             msg: "OTP sent successfully.",
-            data: { user_id: userId, my_referral_code: myRefCode, otp: otp  }
+            data: { user_id: userId, my_referral_code: myRefCode, otp: otp }
         });
 
     } catch (err) {
@@ -1922,7 +1922,7 @@ exports.userAllProducts = async (req, res) => {
 
         // ENRICH EACH PRODUCT
         for (let p of products) {
-            
+
             // IMAGES
             const images = await dbQuery.rawQuery(
                 constants.vals.defaultDB,
@@ -2117,14 +2117,14 @@ exports.userHomeProductList = async (req, res) => {
 exports.userFilterProducts = async (req, res) => {
     try {
         let body = req.body.inputdata || {};
-        let { 
-            category_id, 
-            sub_category_id, 
-            min_price, 
-            max_price, 
+        let {
+            category_id,
+            sub_category_id,
+            min_price,
+            max_price,
             attributes = [],
-            page = 1, 
-            limit = 20 
+            page = 1,
+            limit = 20
         } = body;
 
         let offset = (page - 1) * limit;
@@ -2268,8 +2268,10 @@ exports.userAddProductReview = async (req, res) => {
             "review_id"
         );
 
-        if (existingReview) {
-            // UPDATE
+        if (existingReview && existingReview.length > 0) {
+
+            let reviewId = existingReview[0].review_id;   // FIX
+
             await dbQuery.updateRecord(
                 constants.vals.defaultDB,
                 "product_reviews",
@@ -2278,13 +2280,14 @@ exports.userAddProductReview = async (req, res) => {
                     comment: body.comment || "",
                     updated_at: req.locals.now
                 },
-                `review_id=${existingReview.review_id}`
+                `review_id=${reviewId}`
             );
 
             response.status = "success";
             response.msg = "Review updated successfully.";
             return utility.apiResponse(req, res, response);
         }
+
 
         // ----------------------------------------------------------
         // ⭐ INSERT NEW REVIEW
