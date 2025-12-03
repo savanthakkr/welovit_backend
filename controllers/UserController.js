@@ -1045,117 +1045,69 @@ exports.placeOrder = async (req, res) => {
     try {
         let user = req.userInfo;
         let body = req.body.inputdata;
-        let response = { status: "error", msg: "" };
 
-        if (!body.address_id) {
-            response.msg = "Address ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
-        if (!body.payment_mode) {
-            response.msg = "Payment mode is required.";
-            return utility.apiResponse(req, res, response);
-        }
+        if (!body.address_id)
+            return utility.apiResponse(req, res, { status: "error", msg: "Address ID required" });
 
-        // Fetch cart with stock info
-        let cartItems = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `
-            SELECT c.*, 
-                   p.product_sale_price, 
-                   p.available_quantity 
-            FROM user_carts c
-            JOIN products p ON c.product_Id = p.product_id
-            WHERE c.user_Id=${user.user_id} AND c.status='active'
-            `
-        );
+        if (!body.payment_mode)
+            return utility.apiResponse(req, res, { status: "error", msg: "Payment mode required" });
 
-        if (!cartItems || cartItems.length === 0) {
-            response.msg = "Cart is empty.";
-            return utility.apiResponse(req, res, response);
-        }
+        // Calculate cart
+        const cart = await calculateCartWithOffers(user.user_id);
+        if (cart.empty)
+            return utility.apiResponse(req, res, { status: "error", msg: "Cart is empty" });
 
-        // STOCK CHECK
-        for (let item of cartItems) {
-            if (item.product_Quantity > item.available_quantity) {
-                response.msg = `Insufficient stock for product ID ${item.product_Id}`;
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        let originalAmount = 0;
-        let finalAmount = 0;
-        let offerFound = false;
-        let totalOfferDiscount = 0;
-
-        // Offer calculation
-        for (let item of cartItems) {
-            let qty = parseInt(item.product_Quantity) || 1;
-            let price = parseFloat(item.product_sale_price) || 0;
-
-            let productTotal = qty * price;
-            originalAmount += productTotal;
-
-            let offer = await dbQuery.fetchSingleRecord(
-                constants.vals.defaultDB,
-                "offers",
-                `WHERE user_Id=${user.user_id} AND product_Id=${item.product_Id}`,
-                "offer_Discount, offer_Type"
-            );
-
-            if (offer) {
-                offerFound = true;
-
-                let discount =
-                    offer.offer_Type === "percentage"
-                        ? (productTotal * offer.offer_Discount) / 100
-                        : offer.offer_Discount;
-
-                discount = parseFloat(discount) || 0;
-                productTotal -= discount;
-                totalOfferDiscount += discount;
-            }
-
-            finalAmount += productTotal;
-        }
-
-        // COUPON
+        let finalAmount = cart.totalAfterOffers;
         let couponId = null;
-        let couponDiscountAmount = 0;
+        let couponDiscount = 0;
 
-        if (body.coupon_code) {
-            let coupon = await dbQuery.fetchSingleRecord(
+        // If user applied coupon
+        if (body.coupon_id && body.coupon_code) {
+            const coupon = await dbQuery.fetchSingleRecord(
                 constants.vals.defaultDB,
                 "coupons",
-                `WHERE coupon_Code='${body.coupon_code}'`,
+                `WHERE coupon_id=${body.coupon_id} AND coupon_Code='${body.coupon_code}'`,
                 "coupon_id, coupons_Discount, coupons_Type"
             );
 
             if (coupon) {
+                const couponDisc = parseFloat(coupon.coupons_Discount);
+                const couponType = coupon.coupons_Type.toLowerCase();
+
+                if (couponType === "percentage") {
+                    couponDiscount = cart.nonOfferSubtotal * (couponDisc / 100);
+                } else {
+                    couponDiscount = couponDisc;
+                }
+
+                if (couponDiscount > cart.nonOfferSubtotal)
+                    couponDiscount = cart.nonOfferSubtotal;
+
+                finalAmount -= couponDiscount;
                 couponId = coupon.coupon_id;
-                let couponDiscount = parseFloat(coupon.coupons_Discount) || 0;
-
-                if (coupon.coupons_Type === "percentage")
-                    couponDiscountAmount = (finalAmount * couponDiscount) / 100;
-                else
-                    couponDiscountAmount = couponDiscount;
-
-                finalAmount -= couponDiscountAmount;
             }
         }
 
-        finalAmount = Math.max(0, parseFloat(finalAmount.toFixed(2)));
+        finalAmount = parseFloat(finalAmount.toFixed(2));
 
-        // Create order
-        let orderId = await dbQuery.insertSingle(
+        // Validate client-side final amount (important)
+        if (body.final_amount && parseFloat(body.final_amount) !== finalAmount) {
+            return utility.apiResponse(req, res, {
+                status: "error",
+                msg: "Cart updated. Please refresh."
+            });
+        }
+
+        // Insert order
+        const orderId = await dbQuery.insertSingle(
             constants.vals.defaultDB,
             "user_orders",
             {
                 user_id: user.user_id,
-                order_amount: originalAmount,
+                order_amount: cart.originalTotal,
+                discount: cart.totalOfferDiscount + couponDiscount,
                 coupon_id: couponId,
                 coupon_code: body.coupon_code || null,
-                discount: totalOfferDiscount + couponDiscountAmount,
-                delivery_charge: 0,
                 total_amount: finalAmount,
                 payment_mode: body.payment_mode,
                 transaction_id: body.transaction_id || null,
@@ -1164,30 +1116,24 @@ exports.placeOrder = async (req, res) => {
             }
         );
 
-        // REDUCE STOCK
-        for (let item of cartItems) {
-            await dbQuery.rawQuery(
-                constants.vals.defaultDB,
-                `
-                UPDATE products 
-                SET available_quantity = available_quantity - ${item.product_Quantity}
-                WHERE product_id = ${item.product_Id}
-                `
-            );
-        }
+        // Mark cart as ordered
+        await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `UPDATE user_carts 
+             SET status='ordered', order_id=${orderId}, updated_at='${req.locals.now}'
+             WHERE user_Id=${user.user_id} AND status='active'`
+        );
 
         return utility.apiResponse(req, res, {
             status: "success",
-            msg: "Order placed successfully.",
+            msg: "Order placed successfully",
             data: {
                 order_id: orderId,
-                discount: totalOfferDiscount + couponDiscountAmount,
-                final_amount: finalAmount
+                total_amount: finalAmount
             }
         });
 
     } catch (err) {
-        console.error(err);
         throw err;
     }
 };
