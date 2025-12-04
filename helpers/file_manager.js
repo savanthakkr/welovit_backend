@@ -53,14 +53,11 @@ exports.userUploadImage = (folderName) => {
                 for (const file of req.files) {
                     const { originalname, mimetype, size } = file;
 
-                    if (
-                        mimetype !== 'image/jpeg' &&
-                        mimetype !== 'image/png' &&
-                        mimetype !== 'audio/mpeg' &&
-                        mimetype !== 'video/mp4'
-                    ) {
-                        response['msg'] = `Unsupported file type: ${mimetype}`;
+                    if (mimetype === 'video/mp4' && size > 2 * 1024 * 1024) {
+                        response['msg'] = `Video file ${originalname} exceeds 2 MB size limit.`;
                         return utility.apiResponse(req, res, response);
+                        // return validationErrorResponse(res, `Video file "${originalname}" exceeds 2 MB size limit.`);
+                        // return res.status(400).json({ message: `Video file "${originalname}" exceeds 2 MB size limit.` });
                     }
 
                     if (mimetype !== 'image/jpeg' && mimetype !== 'audio/mpeg' && mimetype !== 'video/mp4') {
@@ -74,7 +71,7 @@ exports.userUploadImage = (folderName) => {
                     const { mimetype, buffer, fieldname } = file;
 
                     let folderPath = '';
-                    if (mimetype === 'image/jpeg' || mimetype === 'image/png') {
+                    if (mimetype === 'image/jpeg') {
                         folderPath = FileManager.resolvePath(folderName + 'image');
                     } else if (mimetype === 'audio/mpeg') {
                         folderPath = FileManager.resolvePath(folderName + 'audio');
