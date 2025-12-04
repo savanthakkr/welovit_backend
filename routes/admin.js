@@ -2,6 +2,7 @@ var express = require("express");
 var apiMiddleware = require("../middlewares/api");
 const {listAttributeWithValues,getAdminProfile,approveWithdraw, rejectWithdraw, addCoupon,listCoupons,deleteCoupon,addOffer,listOffers,deleteOffer, listAttributeValue, listAttribute, deleteAttributeValue, editAttributeValue, addAttributeValue, deleteAttribute, editAttribute, addAttribute, listCategory, updateProduct, deleteProduct, getProductDetails, listProduct, uploadProductImages, deleteProductImage, addProduct, listSubCategory,listSubCategoryByCategoryId, deleteSubCategory, editSubCategory, addSubCategory, deleteCategory, editCategory, addCategory, adminLogin, addAdmin, addPatrolUnit, addPoliceStation, adminList, patrolUnitList, policeOfficerList, policeOfficerView, updateAdmin, editPatrolUnit, editPoliceStation, logout, policeRequestList, deletePoliceStation, deletePatrolUnit, deleteAdmin, todayPoliceRequestList, patrolUnitListByPoliceStation, districtPoliceStationList, smsPayload, editSmsPayload } = require("../controllers/adminController");
 const { adminAuthentication } = require('../middlewares/authentication');
+const FileManager = require("../helpers/file_manager");
 
 var app = express();
 
@@ -105,7 +106,12 @@ app.use("/admin/list_sub_category", apiMiddleware, adminAuthentication, listSubC
 app.use("/admin/list_sub_category_category", apiMiddleware, adminAuthentication, listSubCategoryByCategoryId);
 
 // Add Product
-app.use("/admin/add_product", apiMiddleware, adminAuthentication, addProduct);
+app.use("/admin/add_product",
+    apiMiddleware,
+    adminAuthentication,
+    FileManager.userUploadImage('/Products/'),
+    addProduct
+);
 
 // Update Product
 app.use("/admin/update_product", apiMiddleware, adminAuthentication, updateProduct);
@@ -121,8 +127,13 @@ app.use("/admin/list_product", apiMiddleware, adminAuthentication, listProduct);
 
 
 // Upload Product Image
-app.use("/admin/upload_product_image", apiMiddleware, adminAuthentication, uploadProductImages);
-
+app.use(
+    "/admin/upload_product_image",
+    apiMiddleware,
+    adminAuthentication,
+    FileManager.userUploadImage('/Products/'),
+    uploadProductImages
+);
 
 // Delete Product Image
 app.use("/admin/delete_product_image", apiMiddleware, adminAuthentication, deleteProductImage);

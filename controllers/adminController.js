@@ -1196,10 +1196,10 @@ exports.listSubCategoryByCategoryId = async (req, res) => {
 exports.addProduct = async (req, res) => {
     try {
         let response = { status: "error", msg: "" };
-        let body = req?.body?.inputdata;
-        let admin = req?.userInfo;
+        let body = req.body;   // <-- NOT body.inputdata (images come in req.body.file)
 
-        // ========================= VALIDATION =========================
+        let admin = req.userInfo;
+
         let messages = {
             product_name: "Product name is required.",
             category_id: "Category is required.",
@@ -1216,7 +1216,17 @@ exports.addProduct = async (req, res) => {
             }
         }
 
-        // ========================= CHECK CATEGORY =========================
+        // ⭐ FILEMANAGER stores uploaded images in req.body.file
+        const productImages = body.file || [];
+
+        console.log(productImages);
+
+        if (!Array.isArray(productImages) || productImages.length === 0) {
+            response.msg = "Product images are required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // ⭐ Category check
         let category = await dbQuery.fetchSingleRecord(
             constants.vals.defaultDB,
             "categories",
@@ -1234,7 +1244,7 @@ exports.addProduct = async (req, res) => {
             return utility.apiResponse(req, res, response);
         }
 
-        // ========================= CHECK SUB CATEGORY =========================
+        // ⭐ Sub Category check
         let subCat = await dbQuery.fetchSingleRecord(
             constants.vals.defaultDB,
             "sub_categories",
@@ -1252,7 +1262,7 @@ exports.addProduct = async (req, res) => {
             return utility.apiResponse(req, res, response);
         }
 
-        // ========================= DUPLICATE CHECK =========================
+        // ⭐ Duplicate Check
         let dupCheck = await dbQuery.fetchSingleRecord(
             constants.vals.defaultDB,
             "products",
@@ -1265,7 +1275,7 @@ exports.addProduct = async (req, res) => {
             return utility.apiResponse(req, res, response);
         }
 
-        // ========================= INSERT PRODUCT =========================
+        // ⭐ Insert Product
         const slug = makeSlug(body.product_name);
 
         const params = {
@@ -1274,11 +1284,11 @@ exports.addProduct = async (req, res) => {
             admin_id: admin.admin_Id,
             product_name: body.product_name,
             product_slug: slug,
-            product_description: body?.product_description || "",
+            product_description: body.product_description || "",
             product_base_price: body.product_base_price,
             product_sale_price: body.product_sale_price,
-            available_quantity: body.available_quantity,   // 👈 NEW FIELD
-            product_tags: body?.product_tags || "",
+            available_quantity: body.available_quantity,
+            product_tags: body.product_tags || "",
             created_at: req.locals.now
         };
 
@@ -1288,25 +1298,31 @@ exports.addProduct = async (req, res) => {
             params
         );
 
-        // ========================= IMAGES =========================
-        if (Array.isArray(body.product_images)) {
-            for (let img of body.product_images) {
-                await dbQuery.insertSingle(constants.vals.defaultDB, "product_images", {
+        // ⭐ Save Uploaded Images
+        for (let img of productImages) {
+            await dbQuery.insertSingle(
+                constants.vals.defaultDB,
+                "product_images",
+                {
                     product_id: productId,
                     imageUrl: img
-                });
-            }
+                }
+            );
         }
 
-        // ========================= ATTRIBUTE VALUES =========================
+        // ⭐ Attributes
         if (Array.isArray(body.attribute_values)) {
             for (let item of body.attribute_values) {
                 for (let valueId of item.value_ids) {
-                    await dbQuery.insertSingle(constants.vals.defaultDB, "product_attribute_values", {
-                        product_id: productId,
-                        attribute_id: item.attribute_id,
-                        value_id: valueId
-                    });
+                    await dbQuery.insertSingle(
+                        constants.vals.defaultDB,
+                        "product_attribute_values",
+                        {
+                            product_id: productId,
+                            attribute_id: item.attribute_id,
+                            value_id: valueId
+                        }
+                    );
                 }
             }
         }
@@ -1318,9 +1334,11 @@ exports.addProduct = async (req, res) => {
         return utility.apiResponse(req, res, response);
 
     } catch (err) {
+        console.error(err);
         throw err;
     }
 };
+
 
 
 
@@ -1597,34 +1615,54 @@ exports.listProduct = async (req, res) => {
 exports.uploadProductImages = async (req, res) => {
   try {
     let response = { status: "error", msg: "" };
-    let body = req?.body?.inputdata;
-    let admin = req?.userInfo;
+    let body = req.body;  // NOT inputdata
+    let admin = req.userInfo;
 
-    console.log(body);
+    console.log("UPLOAD BODY =>", body);
 
+    // product_id is required
     if (!body?.product_id) {
       response.msg = "Product ID is required.";
       return utility.apiResponse(req, res, response);
     }
 
-    if (!Array.isArray(body?.product_images) || body.product_images.length === 0) {
+    // FileManager stores uploaded file names in req.body.file
+    const uploadedImages = body.file || [];
+
+    console.log("UPLOADED IMAGES =>", uploadedImages);
+
+    if (!Array.isArray(uploadedImages) || uploadedImages.length === 0) {
       response.msg = "Product images are required.";
       return utility.apiResponse(req, res, response);
     }
 
-    for (let img of body.product_images) {
-      await dbQuery.insertSingle(constants.vals.defaultDB, "product_images", {
-        product_id: body.product_id,
-        imageUrl: img
-      });
+    // Insert images in DB
+    for (let fileName of uploadedImages) {
+      await dbQuery.insertSingle(
+        constants.vals.defaultDB,
+        "product_images",
+        {
+          product_id: body.product_id,
+          imageUrl: fileName
+        }
+      );
     }
 
     response.status = "success";
     response.msg = "Product images uploaded successfully.";
+    response.data = {
+      product_id: body.product_id,
+      uploaded_images: uploadedImages
+    };
+
     return utility.apiResponse(req, res, response);
 
-  } catch (err) { throw err; }
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
 };
+
 
 
 
