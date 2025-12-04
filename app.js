@@ -54,6 +54,8 @@ app.use(cors());
 // Make the folder accessible through the URL
 app.use('/apiService', express.static(path.join(__dirname, 'Assets', 'Evidence')));
 app.use('/userProfile', express.static(path.join(__dirname, 'Assets', 'profilePicture')));
+app.use('/productImages', express.static(path.join(__dirname, 'Assets', 'Products')));
+
 
 //Route Prefixes
 app.use("/", indexRouter);
