@@ -36,7 +36,7 @@ exports.userPhoneVerify = async (req, res) => {
             "user_id, user_Name, user_Mobile"
         );
 
-        if (!userData) {
+        if (!userData || Object.keys(userData).length === 0) {
             response.msg = "User not found.";
             return utility.apiResponse(req, res, response);
         }
@@ -2129,15 +2129,14 @@ exports.userFilterProducts = async (req, res) => {
 
         let offset = (page - 1) * limit;
 
-        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
-
+        // FIX: Remove available_quantity because table does not have it
+        let where = `WHERE p.status = 1`;
 
         if (category_id) where += ` AND p.category_id = ${category_id}`;
         if (sub_category_id) where += ` AND p.sub_category_id = ${sub_category_id}`;
         if (min_price) where += ` AND p.product_sale_price >= ${min_price}`;
         if (max_price) where += ` AND p.product_sale_price <= ${max_price}`;
 
-        // main safe query
         const productList = await dbQuery.rawQuery(
             constants.vals.defaultDB,
             `
@@ -2162,13 +2161,21 @@ exports.userFilterProducts = async (req, res) => {
             `
         );
 
-        // Fetch images & attributes per product
+        // FIX: Prevent loop crash
+        if (!Array.isArray(productList)) {
+            return utility.apiResponse(req, res, {
+                status: "error",
+                msg: "Failed to load product list.",
+                data: []
+            });
+        }
+
         for (let p of productList) {
             const images = await dbQuery.rawQuery(
                 constants.vals.defaultDB,
                 `SELECT imageUrl FROM product_images WHERE product_id=${p.product_id}`
             );
-            p.images = images.map(i => i.imageUrl);
+            p.images = Array.isArray(images) ? images.map(i => i.imageUrl) : [];
 
             const attrRows = await dbQuery.rawQuery(
                 constants.vals.defaultDB,
@@ -2182,15 +2189,17 @@ exports.userFilterProducts = async (req, res) => {
             );
 
             let grouped = {};
-            for (let row of attrRows) {
-                if (!grouped[row.attribute_id]) {
-                    grouped[row.attribute_id] = {
-                        attribute_id: row.attribute_id,
-                        attribute_name: row.attribute_name,
-                        values: []
-                    };
+            if (Array.isArray(attrRows)) {
+                for (let row of attrRows) {
+                    if (!grouped[row.attribute_id]) {
+                        grouped[row.attribute_id] = {
+                            attribute_id: row.attribute_id,
+                            attribute_name: row.attribute_name,
+                            values: []
+                        };
+                    }
+                    grouped[row.attribute_id].values.push(row.value);
                 }
-                grouped[row.attribute_id].values.push(row.value);
             }
 
             p.attributes = Object.values(grouped);
@@ -2207,6 +2216,7 @@ exports.userFilterProducts = async (req, res) => {
         throw err;
     }
 };
+
 
 exports.userAddProductReview = async (req, res) => {
     try {
