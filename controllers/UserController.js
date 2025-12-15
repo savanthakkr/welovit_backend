@@ -1886,16 +1886,12 @@ exports.userAllProducts = async (req, res) => {
         let response = { status: "error", msg: "" };
         let body = req?.body?.inputdata || {};
 
-        let page = parseInt(body.page) || 1;
-        let limit = parseInt(body.limit) || 20;
-        let offset = (page - 1) * limit;
-
-        let where = `WHERE p.status = 1 AND p.available_quantity > 0`;
+        let where = `WHERE p.status = 1`;
 
         if (body.category_id) where += ` AND p.category_id=${body.category_id}`;
         if (body.sub_category_id) where += ` AND p.sub_category_id=${body.sub_category_id}`;
 
-        // MAIN PRODUCT QUERY
+        // MAIN PRODUCT QUERY (no limit, no offset)
         const products = await dbQuery.rawQuery(
             constants.vals.defaultDB,
             `
@@ -1916,11 +1912,10 @@ exports.userAllProducts = async (req, res) => {
             LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
             ${where}
             ORDER BY p.product_id DESC
-            LIMIT ${limit} OFFSET ${offset}
             `
         );
 
-        // ENRICH EACH PRODUCT
+        // ENRICH PRODUCTS
         for (let p of products) {
 
             // IMAGES
@@ -1945,7 +1940,7 @@ exports.userAllProducts = async (req, res) => {
                 `
             );
 
-            // GROUP attributes manually
+            // GROUP ATTRIBUTES
             const grouped = {};
             for (let row of attributesRaw) {
                 if (!grouped[row.attribute_id]) {
@@ -1960,22 +1955,9 @@ exports.userAllProducts = async (req, res) => {
             p.attributes = Object.values(grouped);
         }
 
-        // COUNT
-        const count = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `SELECT COUNT(*) AS total FROM products p ${where}`
-        );
-
         response.status = "success";
         response.msg = "All products fetched.";
-        response.data = {
-            products,
-            pagination: {
-                page,
-                limit,
-                total: count[0]?.total || 0
-            }
-        };
+        response.data = products;
 
         return utility.apiResponse(req, res, response);
 
@@ -1983,6 +1965,7 @@ exports.userAllProducts = async (req, res) => {
         throw err;
     }
 };
+
 
 
 
@@ -2122,14 +2105,10 @@ exports.userFilterProducts = async (req, res) => {
             sub_category_id,
             min_price,
             max_price,
-            attributes = [],
-            page = 1,
-            limit = 20
+            attributes = []
         } = body;
 
-        let offset = (page - 1) * limit;
-
-        // FIX: Remove available_quantity because table does not have it
+        // FIXED WHERE
         let where = `WHERE p.status = 1`;
 
         if (category_id) where += ` AND p.category_id = ${category_id}`;
@@ -2137,6 +2116,7 @@ exports.userFilterProducts = async (req, res) => {
         if (min_price) where += ` AND p.product_sale_price >= ${min_price}`;
         if (max_price) where += ` AND p.product_sale_price <= ${max_price}`;
 
+        // MAIN QUERY (no pagination)
         const productList = await dbQuery.rawQuery(
             constants.vals.defaultDB,
             `
@@ -2157,11 +2137,9 @@ exports.userFilterProducts = async (req, res) => {
             LEFT JOIN sub_categories sc ON p.sub_category_id = sc.sub_category_id
             ${where}
             ORDER BY p.product_id DESC
-            LIMIT ${limit} OFFSET ${offset}
             `
         );
 
-        // FIX: Prevent loop crash
         if (!Array.isArray(productList)) {
             return utility.apiResponse(req, res, {
                 status: "error",
@@ -2170,7 +2148,9 @@ exports.userFilterProducts = async (req, res) => {
             });
         }
 
+        // LOOP THROUGH PRODUCTS
         for (let p of productList) {
+
             const images = await dbQuery.rawQuery(
                 constants.vals.defaultDB,
                 `SELECT imageUrl FROM product_images WHERE product_id=${p.product_id}`
@@ -2216,6 +2196,7 @@ exports.userFilterProducts = async (req, res) => {
         throw err;
     }
 };
+
 
 
 exports.userAddProductReview = async (req, res) => {
