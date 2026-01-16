@@ -1,6 +1,6 @@
 var express = require("express");
 var apiMiddleware = require("../middlewares/api");
-const { userRegister,userListCategory,userFilterProducts,userAddProductReview,userListSubCategoryByCategoryId,userListSubCategory,userHomeProductList,userAllProducts,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPinVerify, userPhoneVerify, userForgetPin, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, getOtpLength, getDistrictList, getCityList, offlineData, userOtpVerify, userResendOtp } = require("../controllers/UserController");
+const {verifyPayment,cancelOrder, userRegister,userListCategory,userFilterProducts,userAddProductReview,userListSubCategoryByCategoryId,userListSubCategory,userHomeProductList,userAllProducts,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPhoneVerify, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, userOtpVerify, userResendOtp } = require("../controllers/UserController");
 const { authentication } = require('../middlewares/authentication');
 const FileManager = require("../helpers/file_manager");
 
@@ -61,6 +61,14 @@ app.use("/get_my_commission", apiMiddleware, authentication, getMyCommission);
 
 //
 app.use("/place_order", apiMiddleware, authentication, placeOrder);
+
+
+//
+app.use("/verify_payment", apiMiddleware, authentication, verifyPayment);
+
+
+//
+app.use("/cancel_order", apiMiddleware, authentication, cancelOrder);
 
 //
 app.use("/get_wallet_balance", apiMiddleware, authentication, getWalletBalance);
@@ -123,27 +131,6 @@ app.use(
 
 
 
-// Get otp length
-app.use("/otp_length", apiMiddleware, getOtpLength);
 
-// User requests count
-app.use("/police_request/count", apiMiddleware, authentication, userPoliceRequestCount);
-
-// Get district list
-app.use("/district/list", apiMiddleware, getDistrictList);
-
-// Get city list 
-app.use("/city/list", apiMiddleware, getCityList);
-
-// Get city list 
-app.use("/offline/data", apiMiddleware, offlineData);
-
-
-// User forget pin
-app.use("/forget_pin", apiMiddleware, authentication, userForgetPin);
-
-
-// User pin verify
-app.use("/verify_pin", apiMiddleware, authentication, userPinVerify);
 
 module.exports = app;

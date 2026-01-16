@@ -10,6 +10,14 @@ const moment = require('moment-timezone');
 const { log } = require('console');
 const axios = require("axios");
 const FIREBASE_API_KEY = "AIzaSyDVPHjZwCXmiMVUps0MucNzYko9a-AGcWQ";
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
 
 // User phone number verify
 exports.userPhoneVerify = async (req, res) => {
@@ -895,82 +903,79 @@ exports.userProfilePictureChange = async (req, res) => {
 // Add Cart
 
 exports.addToCart = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let user = req.userInfo;
-        let body = req.body.inputdata;
+  try {
+    let user = req.userInfo;
+    let body = req.body.inputdata;
 
-        if (!body.product_id) {
-            response.msg = "Product ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        let quantity = parseInt(body.quantity || 1);
-
-        // Fetch product
-        let productRow = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_id=${body.product_id} AND status=1`,
-            "product_id, product_sale_price"
-        );
-
-        let product = Array.isArray(productRow) ? productRow[0] : productRow;
-
-        if (!product || !product.product_id) {
-            response.msg = "Invalid product.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        let price = parseFloat(product.product_sale_price);
-
-        // Fetch cart
-        let cartRow = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "user_carts",
-            `WHERE user_Id=${user.user_id} AND product_Id=${body.product_id} AND status='active'`,
-            "cart_id, product_Quantity"
-        );
-
-
-        let cartItem = Array.isArray(cartRow) ? cartRow[0] : cartRow;
-
-        if (cartItem && cartItem.cart_id) {
-            // UPDATE CART
-            let newQty = parseInt(cartItem.product_Quantity) + quantity;
-            let totalAmt = newQty * price;
-
-            await dbQuery.rawQuery(constants.vals.defaultDB,
-                `UPDATE user_carts 
-                 SET product_Quantity=${newQty}, 
-                     product_Total_Amount=${totalAmt}, 
-                     updated_at='${req.locals.now}'
-                 WHERE cart_id=${cartItem.cart_id}`
-            );
-
-        } else {
-            // INSERT NEW
-            let totalAmt = quantity * price;
-
-            await dbQuery.insertSingle(constants.vals.defaultDB, "user_carts", {
-                user_Id: user.user_id,
-                product_Id: body.product_id,
-                product_Quantity: quantity,
-                product_Amount: price,
-                product_Total_Amount: totalAmt,
-                status: 'active',
-                created_at: req.locals.now
-            });
-        }
-
-        response.status = "success";
-        response.msg = "Product added to cart.";
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) {
-        throw err;
+    if (!body.variation_id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Variation ID is required."
+      });
     }
+
+    let quantity = parseInt(body.quantity || 1);
+
+    // Fetch variation
+    let variation = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "product_variations",
+      `WHERE variation_id=${body.variation_id} AND is_delete=0`,
+      "variation_id, product_id, price, sale_price, stock"
+    );
+
+    if (!variation) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Invalid variation."
+      });
+    }
+
+    let price = parseFloat(variation.sale_price || variation.price);
+
+    // Check cart
+    let cartItem = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "user_carts",
+      `WHERE user_Id=${user.user_id} AND variation_id=${body.variation_id} AND status='active'`,
+      "cart_id, product_Quantity"
+    );
+
+    if (cartItem) {
+      let newQty = cartItem.product_Quantity + quantity;
+      let totalAmt = newQty * price;
+
+      await dbQuery.rawQuery(
+        constants.vals.defaultDB,
+        `UPDATE user_carts
+         SET product_Quantity=${newQty},
+             product_Total_Amount=${totalAmt},
+             updated_at='${req.locals.now}'
+         WHERE cart_id=${cartItem.cart_id}`
+      );
+    } else {
+      await dbQuery.insertSingle(constants.vals.defaultDB, "user_carts", {
+        user_Id: user.user_id,
+        product_Id: variation.product_id,
+        variation_id: variation.variation_id,
+        product_Quantity: quantity,
+        product_Amount: price,
+        product_Total_Amount: quantity * price,
+        status: "active",
+        created_at: req.locals.now
+      });
+    }
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Item added to cart."
+    });
+
+  } catch (err) {
+    throw err;
+  }
 };
+
 
 
 
@@ -979,224 +984,275 @@ exports.addToCart = async (req, res) => {
 // get Cart
 
 exports.getCart = async (req, res) => {
-    try {
-        let user = req.userInfo;
+  let user = req.userInfo;
 
-        let sql = `
-            SELECT 
-                c.cart_id,
-                c.product_Quantity,
-                c.product_Amount,
-                c.product_Total_Amount,
+  let sql = `
+    SELECT 
+      c.cart_id,
+      c.product_Quantity,
+      c.product_Amount,
+      c.product_Total_Amount,
 
-                p.product_id,
-                p.product_name,
-                p.product_description,
-                p.product_sale_price,
-                p.product_base_price,
+      p.product_id,
+      p.product_name,
 
-                -- IMAGE
-                (SELECT imageUrl FROM product_images WHERE product_id = p.product_id LIMIT 1) AS product_image,
+      v.variation_id,
+      v.variation_name,
+      v.price,
+      v.sale_price,
 
-                -- OFFER SECTION
-                IF(o.offer_id IS NULL, 0, 1) AS has_offer,
-                o.offer_Discount,
-                o.offer_Type,
+      (SELECT imageUrl 
+       FROM product_images 
+       WHERE variation_id=v.variation_id 
+       AND is_delete=0 
+       LIMIT 1) AS product_image
 
-                -- FINAL PRICE CALCULATION IF OFFER EXISTS
-                CASE 
-                    WHEN o.offer_id IS NOT NULL AND o.offer_Type = 'percentage'
-                        THEN (p.product_sale_price - ((p.product_sale_price * o.offer_Discount) / 100))
-                    WHEN o.offer_id IS NOT NULL AND o.offer_Type = 'flat'
-                        THEN (p.product_sale_price - o.offer_Discount)
-                    ELSE p.product_sale_price
-                END AS final_price_after_offer
+    FROM user_carts c
+    JOIN product_variations v ON c.variation_id=v.variation_id
+    JOIN products p ON v.product_id=p.product_id
+    WHERE c.user_Id=${user.user_id}
+    AND c.status='active'
+  `;
 
-            FROM user_carts AS c
-            JOIN products AS p ON c.product_Id = p.product_id
+  let list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
 
-            -- JOIN OFFER TABLE FOR USER+PRODUCT
-            LEFT JOIN offers AS o 
-                ON o.user_Id = ${user.user_id} 
-                AND o.product_Id = p.product_id 
-                AND o.deleted_at IS NULL
-
-            WHERE c.user_Id = ${user.user_id}
-            AND c.status='active'
-        `;
-
-        let list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
-
-        return utility.apiResponse(req, res, {
-            status: "success",
-            msg: "Cart fetched.",
-            data: { list }
-        });
-
-    } catch (err) {
-        throw err;
-    }
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Cart fetched.",
+    data: { list }
+  });
 };
+
 
 
 //
 // PLACE ORDER
+
+
 exports.placeOrder = async (req, res) => {
-    try {
-        let user = req.userInfo;
-        let body = req.body.inputdata;
-        let response = { status: "error", msg: "" };
+  try {
+    let user = req.userInfo;
+    let body = req.body.inputdata;
 
-        if (!body.address_id) {
-            response.msg = "Address ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
-        if (!body.payment_mode) {
-            response.msg = "Payment mode is required.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // Fetch cart with stock info
-        let cartItems = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `
-            SELECT c.*, 
-                   p.product_sale_price, 
-                   p.available_quantity 
-            FROM user_carts c
-            JOIN products p ON c.product_Id = p.product_id
-            WHERE c.user_Id=${user.user_id} AND c.status='active'
-            `
-        );
-
-        if (!cartItems || cartItems.length === 0) {
-            response.msg = "Cart is empty.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // STOCK CHECK
-        for (let item of cartItems) {
-            if (item.product_Quantity > item.available_quantity) {
-                response.msg = `Insufficient stock for product ID ${item.product_Id}`;
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        let originalAmount = 0;
-        let finalAmount = 0;
-        let offerFound = false;
-        let totalOfferDiscount = 0;
-
-        // Offer calculation
-        for (let item of cartItems) {
-            let qty = parseInt(item.product_Quantity) || 1;
-            let price = parseFloat(item.product_sale_price) || 0;
-
-            let productTotal = qty * price;
-            originalAmount += productTotal;
-
-            let offer = await dbQuery.fetchSingleRecord(
-                constants.vals.defaultDB,
-                "offers",
-                `WHERE user_Id=${user.user_id} AND product_Id=${item.product_Id}`,
-                "offer_Discount, offer_Type"
-            );
-
-            if (offer) {
-                offerFound = true;
-
-                let discount =
-                    offer.offer_Type === "percentage"
-                        ? (productTotal * offer.offer_Discount) / 100
-                        : offer.offer_Discount;
-
-                discount = parseFloat(discount) || 0;
-                productTotal -= discount;
-                totalOfferDiscount += discount;
-            }
-
-            finalAmount += productTotal;
-        }
-
-        // COUPON
-        let couponId = null;
-        let couponDiscountAmount = 0;
-
-        if (body.coupon_code) {
-            let coupon = await dbQuery.fetchSingleRecord(
-                constants.vals.defaultDB,
-                "coupons",
-                `WHERE coupon_Code='${body.coupon_code}'`,
-                "coupon_id, coupons_Discount, coupons_Type"
-            );
-
-            if (coupon) {
-                couponId = coupon.coupon_id;
-                let couponDiscount = parseFloat(coupon.coupons_Discount) || 0;
-
-                if (coupon.coupons_Type === "percentage")
-                    couponDiscountAmount = (finalAmount * couponDiscount) / 100;
-                else
-                    couponDiscountAmount = couponDiscount;
-
-                finalAmount -= couponDiscountAmount;
-            }
-        }
-
-        finalAmount = Math.max(0, parseFloat(finalAmount.toFixed(2)));
-
-        // Create order
-        let orderId = await dbQuery.insertSingle(
-            constants.vals.defaultDB,
-            "user_orders",
-            {
-                user_id: user.user_id,
-                order_amount: originalAmount,
-                coupon_id: couponId,
-                coupon_code: body.coupon_code || null,
-                discount: totalOfferDiscount + couponDiscountAmount,
-                delivery_charge: 0,
-                total_amount: finalAmount,
-                payment_mode: body.payment_mode,
-                transaction_id: body.transaction_id || null,
-                order_status: "pending",
-                created_at: req.locals.now
-            }
-        );
-
-        // REDUCE STOCK
-        for (let item of cartItems) {
-            await dbQuery.rawQuery(
-                constants.vals.defaultDB,
-                `
-                UPDATE products 
-                SET available_quantity = available_quantity - ${item.product_Quantity}
-                WHERE product_id = ${item.product_Id}
-                `
-            );
-        }
-
-        await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `UPDATE user_carts 
-             SET status='ordered', order_id=${orderId}, updated_at='${req.locals.now}'
-             WHERE user_Id=${user.user_id} AND status='active'`
-        );
-
-        return utility.apiResponse(req, res, {
-            status: "success",
-            msg: "Order placed successfully.",
-            data: {
-                order_id: orderId,
-                discount: totalOfferDiscount + couponDiscountAmount,
-                final_amount: finalAmount
-            }
-        });
-
-    } catch (err) {
-        console.error(err);
-        throw err;
+    if (!body.address_id || !body.payment_mode) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Address & payment mode required"
+      });
     }
+
+    // Fetch cart
+    const cartItems = await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      SELECT c.variation_id, c.product_Quantity,
+             v.price, v.sale_price, v.stock
+      FROM user_carts c
+      JOIN product_variations v ON c.variation_id=v.variation_id
+      WHERE c.user_Id=${user.user_id}
+        AND c.status='active'
+      `
+    );
+
+    if (!cartItems.length) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Cart empty"
+      });
+    }
+
+    // Stock check
+    for (let item of cartItems) {
+      if (item.product_Quantity > item.stock) {
+        return utility.apiResponse(req, res, {
+          status: "error",
+          msg: "Insufficient stock"
+        });
+      }
+    }
+
+    let totalAmount = 0;
+    cartItems.forEach(i => {
+      totalAmount += (i.sale_price || i.price) * i.product_Quantity;
+    });
+
+    // Create order
+    const orderId = await dbQuery.insertSingle(
+      constants.vals.defaultDB,
+      "user_orders",
+      {
+        user_id: user.user_id,
+        address: body.address_id,
+        total_amount: totalAmount,
+        payment_mode: body.payment_mode,
+        payment_status: body.payment_mode === "COD" ? "pending" : "pending",
+        order_status: "pending",
+        created_at: req.locals.now
+      }
+    );
+
+    // COD → done
+    if (body.payment_mode === "COD") {
+      return utility.apiResponse(req, res, {
+        status: "success",
+        msg: "Order placed successfully",
+        data: { order_id: orderId }
+      });
+    }
+
+    // ONLINE → create Razorpay order
+    const razorpayOrder = await razorpay.orders.create({
+      amount: Math.round(totalAmount * 100),
+      currency: "INR",
+      receipt: `order_${orderId}`
+    });
+
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${orderId}`,
+      `razorpay_order_id='${razorpayOrder.id}'`
+    );
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Proceed to payment",
+      data: {
+        order_id: orderId,
+        razorpay_order_id: razorpayOrder.id,
+        amount: razorpayOrder.amount
+      }
+    });
+
+  } catch (err) {
+    throw err;
+  }
+};
+
+
+exports.verifyPayment = async (req, res) => {
+  try {
+    let user = req.userInfo;
+    let body = req.body.inputdata;
+
+    const { order_id, razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
+
+    const sign = razorpay_order_id + "|" + razorpay_payment_id;
+    const expected = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(sign)
+      .digest("hex");
+
+    if (expected !== razorpay_signature) {
+      await dbQuery.updateRecord(
+        constants.vals.defaultDB,
+        "user_orders",
+        `order_id=${order_id}`,
+        `payment_status='failed'`
+      );
+
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Payment verification failed"
+      });
+    }
+
+    // Fetch cart
+    const cartItems = await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      SELECT c.variation_id, c.product_Quantity
+      FROM user_carts c
+      WHERE c.user_Id=${user.user_id}
+        AND c.status='active'
+      `
+    );
+
+    // Reduce stock
+    for (let item of cartItems) {
+      await dbQuery.rawQuery(
+        constants.vals.defaultDB,
+        `
+        UPDATE product_variations
+        SET stock = stock - ${item.product_Quantity}
+        WHERE variation_id=${item.variation_id}
+        `
+      );
+    }
+
+    // Close cart
+    await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      UPDATE user_carts
+      SET status='ordered', order_id=${order_id}
+      WHERE user_Id=${user.user_id} AND status='active'
+      `
+    );
+
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${order_id}`,
+      `
+      payment_status='paid',
+      razorpay_payment_id='${razorpay_payment_id}',
+      razorpay_signature='${razorpay_signature}'
+      `
+    );
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Payment verified & order confirmed"
+    });
+
+  } catch (err) {
+    throw err;
+  }
+};
+
+
+
+exports.cancelOrder = async (req, res) => {
+  let user = req.userInfo;
+  let { order_id, reason } = req.body.inputdata;
+
+  let order = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `WHERE order_id=${order_id} AND user_id=${user.user_id}`,
+    "order_status"
+  );
+
+  if (!order) {
+    return utility.apiResponse(req, res, {
+      status: "error",
+      msg: "Order not found."
+    });
+  }
+
+  if (["pickup", "delivered"].includes(order.order_status)) {
+    return utility.apiResponse(req, res, {
+      status: "error",
+      msg: "Order cannot be cancelled after pickup."
+    });
+  }
+
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `order_id=${order_id}`,
+    `
+    order_status='cancelled',
+    cancel_reason='${reason}',
+    updated_at='${req.locals.now}'
+    `
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Order cancelled successfully."
+  });
 };
 
 
@@ -1457,75 +1513,49 @@ exports.removeCart = async (req, res) => {
 
 // Update Cart Quantity
 exports.updateCartQuantity = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let user = req.userInfo;
-        let body = req.body.inputdata;
+  let user = req.userInfo;
+  let { cart_id, quantity } = req.body.inputdata;
 
-        if (!body.cart_id) {
-            response.msg = "Cart ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
+  if (!cart_id || quantity < 1) {
+    return utility.apiResponse(req, res, {
+      status: "error",
+      msg: "Invalid input."
+    });
+  }
 
-        if (!body.quantity || body.quantity < 1) {
-            response.msg = "Quantity must be at least 1.";
-            return utility.apiResponse(req, res, response);
-        }
+  let cart = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    "user_carts",
+    `WHERE cart_id=${cart_id} AND user_Id=${user.user_id} AND status='active'`,
+    "variation_id"
+  );
 
-        let quantity = parseInt(body.quantity);
+  let variation = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    "product_variations",
+    `WHERE variation_id=${cart.variation_id}`,
+    "price, sale_price"
+  );
 
-        // Fetch cart item
-        let cartRow = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "user_carts",
-            `WHERE cart_id=${body.cart_id} AND user_Id=${user.user_id} AND status='active'`,
-            "cart_id, product_Id"
-        );
+  let price = variation.sale_price || variation.price;
 
-        let cartItem = Array.isArray(cartRow) ? cartRow[0] : cartRow;
+  await dbQuery.rawQuery(
+    constants.vals.defaultDB,
+    `
+    UPDATE user_carts
+    SET product_Quantity=${quantity},
+        product_Total_Amount=${quantity * price},
+        updated_at='${req.locals.now}'
+    WHERE cart_id=${cart_id}
+    `
+  );
 
-        if (!cartItem || !cartItem.cart_id) {
-            response.msg = "Cart item not found.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // Fetch product price
-        let productRow = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_id=${cartItem.product_Id}`,
-            "product_sale_price"
-        );
-
-        let product = Array.isArray(productRow) ? productRow[0] : productRow;
-
-        if (!product) {
-            response.msg = "Product not found.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        let price = parseFloat(product.product_sale_price);
-        let totalAmount = price * quantity;
-
-        // Update quantity
-        await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `UPDATE user_carts 
-             SET product_Quantity=${quantity},
-                 product_Total_Amount=${totalAmount},
-                 updated_at='${req.locals.now}' 
-             WHERE cart_id=${body.cart_id}`
-        );
-
-        response.status = "success";
-        response.msg = "Cart quantity updated successfully.";
-
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) {
-        throw err;
-    }
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Cart updated."
+  });
 };
+
 
 
 
@@ -2438,122 +2468,6 @@ async function updateUserWalletBalance(userId) {
 
 
 
-// User requests count
-exports.userPoliceRequestCount = async (req, res) => {
-    try {
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let userInfo = req?.userInfo;
-
-        let condition = `WHERE user_Id = '${userInfo?.user_Id}' AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'COUNT(CASE WHEN police_request_Type = "Call Police Now" THEN 1 END) AS total_police_call, COUNT(CASE WHEN police_request_Type = "Emergency" THEN 1 END) AS total_emergency_call';
-
-        const getData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_request', condition, selectFields);
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = getData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Get otp length
-exports.getOtpLength = async (req, res) => {
-    try {
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-
-        const resObj = {
-            otp_length: constants.vals.optLength
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = resObj;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Get district list
-exports.getDistrictList = async (req, res) => {
-    try {
-        let response = {};
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        // response['data'] = constants.vals.districtList;
-        response['data'] = { districtList: constants.vals.districtList, apiKey: constants.vals.google_api };
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Get city list
-exports.getCityList = async (req, res) => {
-    try {
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        const cityList = constants.vals.cityList[bodyData?.district_name];
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = { cityList: cityList, apiKey: constants.vals.google_api };
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Offline data
-exports.offlineData = async (req, res) => {
-    try {
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        const districtList = constants.vals.districtList;
-
-        const data = [];
-
-        for (district of districtList) {
-
-            let obj = {
-                district: district
-            }
-
-            let policeStationCondition = `WHERE police_station_District = '${district}' AND is_active = 1 AND is_delete = 0`;
-            let policeStationFields = 'police_station_Id, police_station_Name, police_station_Area, police_station_Latitude, police_station_Longitude, police_station_phone';
-
-            const policeStationData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'police_station', policeStationCondition, policeStationFields);
-
-            obj.policeStationData = policeStationData;
-
-            data.push(obj);
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = data;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
 
 
 async function calculateCartWithOffers(userId) {

@@ -6,8 +6,7 @@ const jwt = require('jsonwebtoken');
 const fs = require("fs");
 const path = require("path");
 const configPath = path.join(__dirname, "../config/smsConfig.json");
-
-
+const PDFDocument = require("pdfkit");
 
 
 // exports.createTenantDatabase = async (req, res) => {
@@ -708,6 +707,286 @@ exports.deleteAdmin = async (req, res) => {
 };
 
 
+// ============================================
+// CUSTOMER (USER) MANAGEMENT FOR ADMIN PANEL
+// ============================================
+
+// List customers (with optional filters)
+exports.listCustomers = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        let page = parseInt(body.page) || 1;
+        let limit = parseInt(body.limit) || 10;
+        let offset = (page - 1) * limit;
+
+        let where = "WHERE is_delete = 0";
+
+        // Filter by status
+        if (body.status === "active") {
+            where += " AND is_active = 1";
+        } else if (body.status === "inactive" || body.status === "deactive") {
+            where += " AND is_active = 0";
+        }
+
+        // Search by name or mobile
+        if (body.search && body.search.trim() !== "") {
+            const search = body.search.trim();
+            where += ` AND (user_Name LIKE '%${search}%' OR user_Mobile LIKE '%${search}%')`;
+        }
+
+        const listQuery = `
+            SELECT 
+                user_id,
+                user_Name,
+                user_Mobile,
+                user_Profile_Photo,
+                user_Wallet_Amount,
+                is_active,
+                created_at
+            FROM users
+            ${where}
+            ORDER BY user_id DESC
+            LIMIT ${limit} OFFSET ${offset}
+        `;
+
+        const countQuery = `
+            SELECT COUNT(*) AS total
+            FROM users
+            ${where}
+        `;
+
+        const list = await dbQuery.rawQuery(constants.vals.defaultDB, listQuery);
+        const countRows = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
+        const total = countRows?.[0]?.total || 0;
+
+        // Attach full URL for profile photo if present
+        for (let u of list) {
+            if (u.user_Profile_Photo) {
+                u.user_Profile_Photo =
+                    constants.vals.frontEndUserProfilePath + u.user_Profile_Photo;
+            }
+        }
+
+        response.status = "success";
+        response.msg = "Customer list fetched successfully.";
+        response.data = {
+            list,
+            pagination: {
+                page,
+                limit,
+                total
+            }
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (error) {
+        console.log("List Customers Error:", error);
+        throw error;
+    }
+};
+
+
+// Get single customer details by user_id
+exports.getCustomerDetails = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        if (!body.user_id) {
+            response.msg = "User ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        let condition = `WHERE user_id = ${body.user_id} AND is_delete = 0`;
+        let selectFields = `
+            user_id,
+            user_Name,
+            user_Mobile,
+            user_Solun_Name,
+            user_Ref_Code,
+            user_Profile_Photo,
+            user_Wallet_Amount,
+            user_Firebase_Token,
+            is_active,
+            created_at,
+            updated_at
+        `;
+
+        const userData = await dbQuery.fetchSingleRecord(
+            constants.vals.defaultDB,
+            "users",
+            condition,
+            selectFields
+        );
+
+        if (!userData || (Array.isArray(userData) && userData.length === 0)) {
+            response.msg = "User not found.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // Normalise when driver returns plain object
+        const user = Array.isArray(userData) ? userData[0] : userData;
+
+        if (user.user_Profile_Photo) {
+            user.user_Profile_Photo =
+                constants.vals.frontEndUserProfilePath + user.user_Profile_Photo;
+        }
+
+        // Optional: Basic order stats for quick view
+        const ordersStats = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                COUNT(*) AS orders_count,
+                IFNULL(SUM(total_amount), 0) AS total_spent
+            FROM user_orders
+            WHERE user_id = ${body.user_id}
+            `
+        );
+
+        user.orders_count = ordersStats?.[0]?.orders_count || 0;
+        user.total_spent = ordersStats?.[0]?.total_spent || 0;
+
+        response.status = "success";
+        response.msg = "Customer details fetched successfully.";
+        response.data = user;
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (error) {
+        console.log("Get Customer Details Error:", error);
+        throw error;
+    }
+};
+
+
+// Get orders of a specific customer
+exports.getCustomerOrders = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        if (!body.user_id) {
+            response.msg = "User ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        let where = `WHERE o.user_id = ${body.user_id}`;
+
+        if (body.order_status) {
+            where += ` AND o.order_status='${body.order_status}'`;
+        }
+
+        if (body.payment_mode) {
+            where += ` AND o.payment_mode='${body.payment_mode}'`;
+        }
+
+        const sql = `
+            SELECT 
+                o.order_id,
+                o.total_amount,
+                o.order_status,
+                o.admin_status,
+                o.payment_mode,
+                o.created_at
+            FROM user_orders o
+            ${where}
+            ORDER BY o.order_id DESC
+        `;
+
+        const orders = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
+
+        response.status = "success";
+        response.msg = "Customer orders fetched successfully.";
+        response.data = { orders };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (error) {
+        console.log("Get Customer Orders Error:", error);
+        throw error;
+    }
+};
+
+
+// Activate customer (set is_active = 1)
+exports.activateCustomer = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        if (!body.user_id) {
+            response.msg = "User ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        const date = req.locals.now;
+
+        const updateValue = `
+            is_active = 1,
+            is_delete = 0,
+            updated_at = '${date}'
+        `;
+
+        await dbQuery.updateRecord(
+            constants.vals.defaultDB,
+            "users",
+            `user_id = ${body.user_id}`,
+            updateValue
+        );
+
+        response.status = "success";
+        response.msg = "Customer activated successfully.";
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (error) {
+        console.log("Activate Customer Error:", error);
+        throw error;
+    }
+};
+
+
+// Deactivate customer (set is_active = 0)
+exports.deactivateCustomer = async (req, res) => {
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req?.body?.inputdata || {};
+
+        if (!body.user_id) {
+            response.msg = "User ID is required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        const date = req.locals.now;
+
+        const updateValue = `
+            is_active = 0,
+            updated_at = '${date}'
+        `;
+
+        await dbQuery.updateRecord(
+            constants.vals.defaultDB,
+            "users",
+            `user_id = ${body.user_id}`,
+            updateValue
+        );
+
+        response.status = "success";
+        response.msg = "Customer deactivated successfully.";
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (error) {
+        console.log("Deactivate Customer Error:", error);
+        throw error;
+    }
+};
+
+
 // CATEGORY: ADD
 exports.addCategory = async (req, res) => {
     try {
@@ -1194,418 +1473,242 @@ exports.listSubCategoryByCategoryId = async (req, res) => {
 
 // Add Product
 exports.addProduct = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let body = req.body;   // <-- NOT body.inputdata (images come in req.body.file)
+  try {
+    let body = req.body;
+    let admin = req.userInfo;
 
-        let admin = req.userInfo;
-
-        let messages = {
-            product_name: "Product name is required.",
-            category_id: "Category is required.",
-            sub_category_id: "Sub category is required.",
-            product_base_price: "Base price is required.",
-            product_sale_price: "Sale price is required.",
-            available_quantity: "Available quantity is required."
-        };
-
-        for (let key in messages) {
-            if (!body[key] && body[key] !== 0) {
-                response.msg = messages[key];
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        // ⭐ FILEMANAGER stores uploaded images in req.body.file
-        const productImages = body.file || [];
-
-        console.log(productImages);
-
-        if (!Array.isArray(productImages) || productImages.length === 0) {
-            response.msg = "Product images are required.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // ⭐ Category check
-        let category = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "categories",
-            `WHERE category_id=${body.category_id} AND is_delete=0`,
-            "category_id, admin_Id"
-        );
-
-        if (!category) {
-            response.msg = "Invalid category!";
-            return utility.apiResponse(req, res, response);
-        }
-
-        if (admin.admin_Type === "admin" && category.admin_Id !== admin.admin_Id) {
-            response.msg = "You cannot add product in this category.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // ⭐ Sub Category check
-        let subCat = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "sub_categories",
-            `WHERE sub_category_id=${body.sub_category_id} AND is_delete=0`,
-            "sub_category_id, admin_Id"
-        );
-
-        if (!subCat) {
-            response.msg = "Invalid sub category!";
-            return utility.apiResponse(req, res, response);
-        }
-
-        if (admin.admin_Type === "admin" && subCat.admin_Id !== admin.admin_Id) {
-            response.msg = "You cannot add product in this sub category.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // ⭐ Duplicate Check
-        let dupCheck = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_name='${body.product_name}' AND admin_id=${admin.admin_Id} AND status = 1`,
-            "product_id"
-        );
-
-        if (Array.isArray(dupCheck) && dupCheck.length > 0) {
-            response.msg = "Product already exists.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        // ⭐ Insert Product
-        const slug = makeSlug(body.product_name);
-
-        const params = {
-            category_id: body.category_id,
-            sub_category_id: body.sub_category_id,
-            admin_id: admin.admin_Id,
-            product_name: body.product_name,
-            product_slug: slug,
-            product_description: body.product_description || "",
-            product_base_price: body.product_base_price,
-            product_sale_price: body.product_sale_price,
-            available_quantity: body.available_quantity,
-            product_tags: body.product_tags || "",
-            created_at: req.locals.now
-        };
-
-        const productId = await dbQuery.insertSingle(
-            constants.vals.defaultDB,
-            "products",
-            params
-        );
-
-        // ⭐ Save Uploaded Images
-        for (let img of productImages) {
-            await dbQuery.insertSingle(
-                constants.vals.defaultDB,
-                "product_images",
-                {
-                    product_id: productId,
-                    imageUrl: img
-                }
-            );
-        }
-
-        // ⭐ Attributes
-        if (Array.isArray(body.attribute_values)) {
-            for (let item of body.attribute_values) {
-                for (let valueId of item.value_ids) {
-                    await dbQuery.insertSingle(
-                        constants.vals.defaultDB,
-                        "product_attribute_values",
-                        {
-                            product_id: productId,
-                            attribute_id: item.attribute_id,
-                            value_id: valueId
-                        }
-                    );
-                }
-            }
-        }
-
-        response.status = "success";
-        response.msg = "Product added successfully.";
-        response.data = { product_id: productId };
-
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) {
-        console.error(err);
-        throw err;
+    if (!body.product_name || !body.category_id || !body.sub_category_id) {
+      return utility.apiResponse(req, res, { status: "error", msg: "Required fields missing" });
     }
+
+    const slug = makeSlug(body.product_name);
+
+    const productId = await dbQuery.insertSingle(
+      constants.vals.defaultDB,
+      "products",
+      {
+        admin_id: admin.admin_Id,
+        category_id: body.category_id,
+        sub_category_id: body.sub_category_id,
+        product_name: body.product_name,
+        product_slug: slug,
+        product_description: body.product_description,
+
+        brand: body.brand,
+        manufacturer: body.manufacturer,
+        packer: body.packer,
+        item_form: body.item_form,
+        product_benefits: body.product_benefits,
+        weight: body.weight,
+        product_dimensions: body.product_dimensions,
+
+        product_tags: body.product_tags,
+        created_at: req.locals.now
+      }
+    );
+
+    // Images
+    for (let img of body.images || []) {
+      await dbQuery.insertSingle(constants.vals.defaultDB, "product_images", {
+        product_id: productId,
+        imageUrl: img
+      });
+    }
+
+    // Variations
+    for (let v of body.variations || []) {
+      const variationId = await dbQuery.insertSingle(
+        constants.vals.defaultDB,
+        "product_variations",
+        {
+          product_id: productId,
+          sku: v.sku,
+          variation_name: v.variation_name,
+          price: v.price,
+          sale_price: v.sale_price,
+          stock: v.stock,
+          weight: v.weight,
+          dimensions: v.dimensions
+        }
+      );
+
+      for (let a of v.attributes || []) {
+        await dbQuery.insertSingle(
+          constants.vals.defaultDB,
+          "variation_attribute_values",
+          {
+            variation_id: variationId,
+            attribute_id: a.attribute_id,
+            value_id: a.value_id
+          }
+        );
+      }
+    }
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Product added successfully",
+      data: { product_id: productId }
+    });
+
+  } catch (err) { throw err; }
 };
-
-
-
-
-
-
-
 exports.updateProduct = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let body = req?.body?.inputdata;
-        let admin = req?.userInfo;
+  let body = req.body.inputdata;
 
-        if (!body.product_id) {
-            response.msg = "Product ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
+  if (!body.product_id) {
+    return utility.apiResponse(req, res, { status: "error", msg: "Product ID required" });
+  }
 
-        let product = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_id=${body.product_id}`,
-            "product_id, admin_id"
-        );
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "products",
+    `product_id=${body.product_id}`,
+    `
+      product_name='${body.product_name}',
+      product_slug='${makeSlug(body.product_name)}',
+      product_description='${body.product_description}',
+      brand='${body.brand}',
+      manufacturer='${body.manufacturer}',
+      packer='${body.packer}',
+      item_form='${body.item_form}',
+      product_benefits='${body.product_benefits}',
+      weight='${body.weight}',
+      product_dimensions='${body.product_dimensions}',
+      updated_at='${req.locals.now}'
+    `
+  );
 
-        if (!product || product.length === 0) {
-            response.msg = "Product not found.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        if (admin.admin_Type === "admin" && product.admin_id !== admin.admin_Id) {
-            response.msg = "You are not allowed to update this product.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        const slug = body.product_name ? makeSlug(body.product_name) : product.product_slug;
-
-        let updateFields = [];
-
-        for (let key in body) {
-            if (key !== "product_id") {
-                updateFields.push(`${key}='${body[key]}'`);
-            }
-        }
-
-        updateFields.push(`product_slug='${slug}'`);
-        updateFields.push(`updated_at='${req.locals.now}'`);
-
-        await dbQuery.updateRecord(
-            constants.vals.defaultDB,
-            "products",
-            `product_id=${body.product_id}`,
-            updateFields.join(",")
-        );
-
-        response.status = "success";
-        response.msg = "Product updated successfully.";
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) {
-        throw err;
-    }
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Product updated"
+  });
 };
+
+
 
 exports.deleteProduct = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let body = req?.body?.inputdata;
-        let admin = req?.userInfo;
+  let { product_id } = req.body.inputdata;
 
-        if (!body.product_id) {
-            response.msg = "Product ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "products",
+    `product_id=${product_id}`,
+    `is_delete=1, status=0, deleted_at='${req.locals.now}'`
+  );
 
-        let product = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_id=${body.product_id}`,
-            "product_id, admin_id"
-        );
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "product_variations",
+    `product_id=${product_id}`,
+    `is_delete=1, deleted_at='${req.locals.now}'`
+  );
 
-        if (!product || product.length === 0) {
-            response.msg = "Product not found.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        if (admin.admin_Type === "admin" && product.admin_id !== admin.admin_Id) {
-            response.msg = "You are not allowed to delete this product.";
-            return utility.apiResponse(req, res, response);
-        }
-
-        const updateValue = `
-            status = 0,
-            updated_at='${req.locals.now}'
-        `;
-
-        await dbQuery.updateRecord(
-            constants.vals.defaultDB,
-            "products",
-            `product_id=${body.product_id}`,
-            updateValue
-        );
-
-        response.status = "success";
-        response.msg = "Product deleted successfully.";
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) { throw err; }
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Product deleted"
+  });
 };
+
 
 
 
 exports.getProductDetails = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let body = req?.body?.inputdata;
+  try {
+    let { product_id } = req.body.inputdata;
 
-        if (!body.product_id) {
-            response.msg = "Product ID is required.";
-            return utility.apiResponse(req, res, response);
-        }
+    if (!product_id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Product ID required."
+      });
+    }
 
-        let product = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "products",
-            `WHERE product_id=${body.product_id}`,
-            "*"
-        );
+    const product = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "products",
+      `WHERE product_id=${product_id} AND is_delete=0`,
+      "*"
+    );
 
-        if (!product || product.length === 0) {
-            response.msg = "Product not found.";
-            return utility.apiResponse(req, res, response);
-        }
+    if (!product) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Product not found."
+      });
+    }
 
-        let images = await dbQuery.fetchRecords(
-            constants.vals.defaultDB,
-            "product_images",
-            `WHERE product_id=${body.product_id}`,
-            "product_image_id, imageUrl"
-        );
+    // Product images
+    const images = await dbQuery.fetchRecords(
+      constants.vals.defaultDB,
+      "product_images",
+      `WHERE product_id=${product_id} AND variation_id IS NULL AND is_delete=0`,
+      "product_image_id, imageUrl"
+    );
 
-        product.images = images;
+    // Variations
+    const variations = await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      SELECT 
+        v.*,
+        (
+          SELECT JSON_ARRAYAGG(imageUrl)
+          FROM product_images pi
+          WHERE pi.variation_id=v.variation_id AND pi.is_delete=0
+        ) AS images
+      FROM product_variations v
+      WHERE v.product_id=${product_id} AND v.is_delete=0
+      `
+    );
 
-        response.status = "success";
-        response.msg = "Product fetched successfully.";
-        response.data = product;
-        return utility.apiResponse(req, res, response);
+    product.images = images;
+    product.variations = variations;
 
-    } catch (err) { throw err; }
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Product fetched successfully.",
+      data: product
+    });
+
+  } catch (err) { throw err; }
 };
+
+
 
 
 exports.listProduct = async (req, res) => {
-    try {
-        let response = { status: "error", msg: "" };
-        let body = req?.body?.inputdata || {};
-        let admin = req?.userInfo;
+  const list = await dbQuery.rawQuery(
+    constants.vals.defaultDB,
+    `
+    SELECT 
+      p.*,
+      (
+        SELECT JSON_ARRAYAGG(
+          JSON_OBJECT(
+            'variation_id', v.variation_id,
+            'sku', v.sku,
+            'price', v.price,
+            'sale_price', v.sale_price,
+            'stock', v.stock
+          )
+        )
+        FROM product_variations v
+        WHERE v.product_id=p.product_id AND v.is_delete=0
+      ) AS variations
+    FROM products p
+    WHERE p.is_delete=0
+    ORDER BY p.product_id DESC
+    `
+  );
 
-        let page = parseInt(body.page) || 1;
-        let limit = parseInt(body.limit) || 10;
-        let offset = (page - 1) * limit;
-
-        let where = `WHERE p.status = 1`;
-
-        if (admin.admin_Type === "admin") {
-            where += ` AND p.admin_id=${admin.admin_Id}`;
-        }
-
-        if (body.category_id) {
-            where += ` AND p.category_id=${body.category_id}`;
-        }
-
-        if (body.sub_category_id) {
-            where += ` AND p.sub_category_id=${body.sub_category_id}`;
-        }
-
-        // ⭐ FINAL QUERY INCLUDING available_quantity
-        const sql = `
-            SELECT 
-                p.product_id,
-                p.product_name,
-                p.product_slug,
-                p.product_description,
-                p.product_base_price,
-                p.product_sale_price,
-                p.available_quantity,
-                p.product_tags,
-                p.product_review,
-                p.created_at,
-                c.category_Name,
-                sc.sub_Category_Name,
-
-                -- ⭐ GROUP ATTRIBUTES
-                JSON_ARRAYAGG(
-                    JSON_OBJECT(
-                        'attribute_id', pav.attribute_id,
-                        'attribute_name', att.name,
-                        'values',
-                        (
-                            SELECT JSON_ARRAYAGG(val.value)
-                            FROM product_attribute_values pav2
-                            JOIN attribute_values val ON pav2.value_id = val.value_id
-                            WHERE pav2.product_id = p.product_id
-                            AND pav2.attribute_id = pav.attribute_id
-                        )
-                    )
-                ) AS product_attributes
-
-            FROM products AS p
-            LEFT JOIN categories AS c ON p.category_id = c.category_id
-            LEFT JOIN sub_categories AS sc ON p.sub_category_id = sc.sub_category_id
-            LEFT JOIN product_attribute_values pav ON pav.product_id = p.product_id
-            LEFT JOIN attributes att ON att.attribute_id = pav.attribute_id
-
-            ${where}
-            GROUP BY p.product_id
-            ORDER BY p.product_id DESC
-            LIMIT ${limit} OFFSET ${offset}
-        `;
-
-        let list = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
-
-        // ⭐ ADD REVIEW SUMMARY FOR EACH PRODUCT
-        for (let p of list) {
-            const reviewSummary = await dbQuery.rawQuery(
-                constants.vals.defaultDB,
-                `
-                SELECT 
-                    AVG(review) AS avg_rating,
-                    COUNT(*) AS total_reviews
-                FROM product_reviews
-                WHERE product_id = ${p.product_id}
-                `
-            );
-
-            p.review_summary = {
-                avg_rating: parseFloat(reviewSummary[0]?.avg_rating || 0).toFixed(1),
-                total_reviews: reviewSummary[0]?.total_reviews || 0
-            };
-        }
-
-        // ⭐ COUNT QUERY
-        const countQuery = `
-            SELECT COUNT(*) AS total
-            FROM products AS p
-            ${where}
-        `;
-
-        const countData = await dbQuery.rawQuery(constants.vals.defaultDB, countQuery);
-
-        response.status = "success";
-        response.msg = "Product list fetched.";
-        response.data = {
-            list,
-            pagination: {
-                page,
-                limit,
-                total: countData[0]?.total || 0
-            }
-        };
-
-        return utility.apiResponse(req, res, response);
-
-    } catch (err) {
-        throw err;
-    }
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Product list",
+    data: list
+  });
 };
+
 
 
 
@@ -1614,51 +1717,71 @@ exports.listProduct = async (req, res) => {
 
 exports.uploadProductImages = async (req, res) => {
   try {
-    let response = { status: "error", msg: "" };
-    let body = req.body;  // NOT inputdata
+    let body = req.body;
     let admin = req.userInfo;
 
-    console.log("UPLOAD BODY =>", body);
-
-    // product_id is required
-    if (!body?.product_id) {
-      response.msg = "Product ID is required.";
-      return utility.apiResponse(req, res, response);
+    if (!body.product_id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Product ID is required."
+      });
     }
 
-    // FileManager stores uploaded file names in req.body.file
-    const uploadedImages = body.file || [];
+    // Ownership check
+    let product = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "products",
+      `WHERE product_id=${body.product_id} AND is_delete=0`,
+      "product_id, admin_id"
+    );
 
-    console.log("UPLOADED IMAGES =>", uploadedImages);
-
-    if (!Array.isArray(uploadedImages) || uploadedImages.length === 0) {
-      response.msg = "Product images are required.";
-      return utility.apiResponse(req, res, response);
+    if (!product) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Product not found."
+      });
     }
 
-    // Insert images in DB
-    for (let fileName of uploadedImages) {
+    if (admin.admin_Type === "admin" && product.admin_id !== admin.admin_Id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Not allowed."
+      });
+    }
+
+    const images = body.file || [];
+
+    if (!Array.isArray(images) || images.length === 0) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Images required."
+      });
+    }
+
+    for (let img of images) {
       await dbQuery.insertSingle(
         constants.vals.defaultDB,
         "product_images",
         {
           product_id: body.product_id,
-          imageUrl: fileName
+          variation_id: body.variation_id || null,
+          imageUrl: img,
+          created_at: req.locals.now
         }
       );
     }
 
-    response.status = "success";
-    response.msg = "Product images uploaded successfully.";
-    response.data = {
-      product_id: body.product_id,
-      uploaded_images: uploadedImages
-    };
-
-    return utility.apiResponse(req, res, response);
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Images uploaded successfully.",
+      data: {
+        product_id: body.product_id,
+        variation_id: body.variation_id || null,
+        images
+      }
+    });
 
   } catch (err) {
-    console.error(err);
     throw err;
   }
 };
@@ -1666,33 +1789,47 @@ exports.uploadProductImages = async (req, res) => {
 
 
 
+
 exports.deleteProductImage = async (req, res) => {
-    try {
-        let { product_image_id } = req.body.inputdata;
+  try {
+    let { product_image_id } = req.body.inputdata;
 
-        let check = await dbQuery.fetchSingleRecord(
-            constants.vals.defaultDB,
-            "product_images",
-            `WHERE product_image_id=${product_image_id}`,
-            "product_image_id"
-        );
+    if (!product_image_id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Image ID required."
+      });
+    }
 
-        if (!check) {
-            return utility.apiResponse(req, res, {
-                status: "error",
-                msg: "Image not found."
-            });
-        }
+    let img = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "product_images",
+      `WHERE product_image_id=${product_image_id} AND is_delete=0`,
+      "product_image_id"
+    );
 
-        await dbQuery.deleteRecord(constants.vals.defaultDB, "product_images", `product_image_id=${product_image_id}`);
+    if (!img) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Image not found."
+      });
+    }
 
-        return utility.apiResponse(req, res, {
-            status: "success",
-            msg: "Image deleted."
-        });
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "product_images",
+      `product_image_id=${product_image_id}`,
+      `is_delete=1, deleted_at='${req.locals.now}'`
+    );
 
-    } catch (err) { throw err; }
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Image deleted."
+    });
+
+  } catch (err) { throw err; }
 };
+
 
 exports.addAttribute = async (req, res) => {
     try {
@@ -2366,683 +2503,392 @@ async function updateUserWalletBalance(userId) {
 
     return total;
 }
-
-
-
-
-
-
-
-
-
-
-// Add patrol unit
-exports.addPatrolUnit = async (req, res) => {
+exports.getAllOrders = async (req, res) => {
     try {
+        let admin = req.userInfo;
+        let body = req.body.inputdata || {};
 
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
+        let where = "WHERE 1=1";
 
-        let messages = {
-            patrol_unit_Name: 'Patrol unit name is required.',
-            police_station_Id: 'Police station is required.'
+        // Optional filters
+        if (body.order_status) {
+            where += ` AND o.order_status='${body.order_status}'`;
         }
 
-        if (bodyData?.is_District) {
-            delete messages.police_station_Id;
+        if (body.payment_mode) {
+            where += ` AND o.payment_mode='${body.payment_mode}'`;
         }
 
-        for (key in messages) {
-            if (utility.checkEmptyString(bodyData[key])) {
-                response['msg'] = messages[key];
-                return utility.apiResponse(req, res, response);
-            }
-        }
+        let sql = `
+            SELECT 
+                o.order_id,
+                o.total_amount,
+                o.order_status,
+                o.admin_status,
+                o.payment_mode,
+                o.created_at,
+                u.user_Name,
+                u.user_Mobile
+            FROM user_orders o
+            JOIN users u ON u.user_id = o.user_id
+            ${where}
+            ORDER BY o.order_id DESC
+        `;
 
-        const params = {
-            patrol_unit_Name: bodyData?.patrol_unit_Name,
-            police_station_Id: bodyData?.police_station_Id,
-            patrol_unit_Latitude: bodyData?.patrol_unit_Latitude,
-            patrol_unit_Longitude: bodyData?.patrol_unit_Longitude,
-            patrol_unit_District: bodyData?.patrol_unit_District,
-            is_District: bodyData?.is_District ? 1 : 0,
-            created_at: req.locals.now
-        }
+        let orders = await dbQuery.rawQuery(constants.vals.defaultDB, sql);
 
-        if (bodyData?.is_District) {
+        return utility.apiResponse(req, res, {
+            status: "success",
+            msg: "Admin order list fetched.",
+            data: { orders }
+        });
 
-            let condition = `WHERE police_station_District = '${bodyData?.patrol_unit_District}' AND is_District = 1 AND is_active = 1 AND is_delete = 0`;
-            let selectFields = 'police_station_Id';
-
-            const getPoliceStation = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', condition, selectFields);
-
-            params.police_station_Id = getPoliceStation?.police_station_Id;
-        }
-
-        const userId = await dbQuery.insertSingle(constants.vals.defaultDB, 'patrol_unit', params);
-
-        if (userId) {
-            response['status'] = 'success';
-            response['msg'] = 'Patrol unit has been added successfully.';
-            return utility.apiResponse(req, res, response);
-        } else {
-            response['status'] = 'error';
-            response['msg'] = 'There is some error while adding patrol unit data.';
-            return utility.apiResponse(req, res, response);
-        }
-
-    } catch (error) {
-        throw error;
+    } catch (err) {
+        console.error(err);
+        throw err;
     }
-}
-
-// Add Admin station
-exports.addPoliceStation = async (req, res) => {
+};
+// ADMIN ORDER DETAILS
+exports.getOrderDetails = async (req, res) => {
     try {
+        let body = req.body.inputdata;
 
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let messages = {
-            police_station_Name: 'Police station name is required.',
-            police_station_Area: 'Police station area is required.',
-            selected_District: 'District is required.',
-            police_station_latitude: 'Patrol station latitude is required.',
-            police_station_longitude: 'Police station longitude is required.',
-            police_station_phone: 'Police station phone number is required.'
+        if (!body.order_id) {
+            return utility.apiResponse(req, res, {
+                status: "error",
+                msg: "Order ID required."
+            });
         }
 
-        for (key in bodyData) {
-            if (utility.checkEmptyString(bodyData[key])) {
-                response['msg'] = messages[key];
-                return utility.apiResponse(req, res, response);
-            }
+        // ORDER + USER
+        let order = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                o.*,
+                u.user_Name,
+                u.user_Mobile
+            FROM user_orders o
+            JOIN users u ON u.user_id = o.user_id
+            WHERE o.order_id=${body.order_id}
+            `
+        );
+
+        if (!order.length) {
+            return utility.apiResponse(req, res, {
+                status: "error",
+                msg: "Order not found."
+            });
         }
 
-        const params = {
-            police_station_Name: bodyData?.police_station_Name,
-            police_station_Area: bodyData?.police_station_Area,
-            police_station_District: bodyData?.selected_District,
-            police_station_latitude: bodyData?.police_station_latitude,
-            police_station_longitude: bodyData?.police_station_longitude,
-            is_District: bodyData?.is_District ? 1 : 0,
-            police_station_phone: bodyData?.police_station_phone,
-            created_at: req.locals.now,
+        order = order[0];
+
+        // ITEMS
+        let items = await dbQuery.rawQuery(
+            constants.vals.defaultDB,
+            `
+            SELECT 
+                c.product_Id,
+                c.product_Quantity,
+                c.product_Amount,
+                c.product_Total_Amount,
+                p.product_name,
+                p.product_sale_price,
+                (SELECT imageUrl 
+                 FROM product_images 
+                 WHERE product_id=p.product_id 
+                 LIMIT 1) AS product_image
+            FROM user_carts c
+            JOIN products p ON p.product_id = c.product_Id
+            WHERE c.order_id=${body.order_id}
+            `
+        );
+
+        // ADDRESS (via address_id)
+        let address = null;
+        if (order.address) {
+            address = await dbQuery.fetchSingleRecord(
+                constants.vals.defaultDB,
+                "user_addresses",
+                `WHERE address_id=${order.address}`,
+                "*"
+            );
         }
 
-        const userId = await dbQuery.insertSingle(constants.vals.defaultDB, 'police_station', params);
+        return utility.apiResponse(req, res, {
+            status: "success",
+            msg: "Order details fetched successfully.",
+            data: { order, items, address }
+        });
 
-        if (userId) {
-            response['status'] = 'success';
-            response['msg'] = 'Police station has been added successfully.';
-            return utility.apiResponse(req, res, response);
-        } else {
-            response['status'] = 'error';
-            response['msg'] = 'There is some error while adding police station data.';
-            return utility.apiResponse(req, res, response);
-        }
-
-    } catch (error) {
-        throw error;
+    } catch (err) {
+        console.error(err);
+        throw err;
     }
-}
+};
 
-// District police station list
-exports.districtPoliceStationList = async (req, res) => {
+
+
+
+// ADMIN ACCEPT ORDER
+
+exports.acceptOrder = async (req, res) => {
+  try {
+    let { order_id } = req.body.inputdata;
+
+    const order = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "user_orders o JOIN users u ON o.user_id=u.user_id",
+      `WHERE o.order_id=${order_id} AND o.order_status='pending'`,
+      "o.*, u.user_Name, u.user_Mobile"
+    );
+
+    if (!order) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Order cannot be accepted."
+      });
+    }
+
+    const invoiceNumber = `INV-${Date.now()}`;
+
+    // Fetch variation-based items
+    const items = await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      SELECT 
+        c.product_Quantity,
+        c.product_Total_Amount,
+        v.variation_name,
+        v.sku
+      FROM user_carts c
+      JOIN product_variations v ON c.variation_id=v.variation_id
+      WHERE c.order_id=${order_id}
+      `
+    );
+
+    const address = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "user_addresses",
+      `WHERE address_id=${order.address}`,
+      "*"
+    );
+
+    // Generate PDF
+    const invoiceFile = await generateInvoicePDF(
+      { ...order, invoice_number: invoiceNumber },
+      items,
+      address
+    );
+
+    // Update order
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${order_id}`,
+      `
+      admin_status='accepted',
+      order_status='accepted',
+      invoice_number='${invoiceNumber}',
+      invoice_file='${invoiceFile}',
+      updated_at='${req.locals.now}'
+      `
+    );
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Order accepted & invoice generated.",
+      data: {
+        invoice_number: invoiceNumber,
+        invoice_file: invoiceFile
+      }
+    });
+
+  } catch (err) {
+    console.error("Accept Order Error:", err);
+    throw err;
+  }
+};
+
+
+
+exports.rejectOrder = async (req, res) => {
+  try {
+    let { order_id, reason } = req.body.inputdata;
+
+    const order = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `WHERE order_id=${order_id}`,
+      "order_status"
+    );
+
+    if (!order || order.order_status !== "pending") {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Order cannot be rejected."
+      });
+    }
+
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${order_id}`,
+      `
+      admin_status='rejected',
+      order_status='rejected',
+      cancel_reason='${reason}',
+      updated_at='${req.locals.now}'
+      `
+    );
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Order rejected."
+    });
+
+  } catch (err) {
+    throw err;
+  }
+};
+
+
+
+exports.adminMarkPickup = async (req, res) => {
+  try {
+    let { order_id } = req.body.inputdata;
+
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${order_id} AND order_status='accepted'`,
+      `
+      order_status='pickup',
+      pickup_at='${req.locals.now}',
+      updated_at='${req.locals.now}'
+      `
+    );
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Order marked as pickup."
+    });
+
+  } catch (err) {
+    throw err;
+  }
+};
+
+
+
+// ADMIN GENERATE INVOICE NUMBER
+
+const generateInvoicePDF = async (order, items, address) => {
+  return new Promise((resolve, reject) => {
     try {
+      const fileName = `invoice_${order.invoice_number}.pdf`;
+      const dirPath = path.join(__dirname, "../Assets/uploads/invoices");
 
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
 
-        let policeStationCondition = `WHERE is_District = 1 AND is_delete = 0 ORDER BY created_at DESC`;
-        let policeStationFields = 'police_station_Id, police_station_Name, police_station_Area, police_station_District, police_station_Latitude, police_station_Longitude, is_District, police_station_phone, is_active';
+      const filePath = path.join(dirPath, fileName);
 
-        const policeStationData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'police_station', policeStationCondition, policeStationFields);
+      const doc = new PDFDocument({ margin: 40 });
+      const stream = fs.createWriteStream(filePath);
 
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = policeStationData;
-        return utility.apiResponse(req, res, response);
+      doc.pipe(stream);
 
-    } catch (error) {
-        throw error;
+      // HEADER
+      doc.fontSize(18).text("INVOICE", { align: "center" });
+      doc.moveDown();
+
+      doc.fontSize(11);
+      doc.text(`Invoice No: ${order.invoice_number}`);
+      doc.text(`Order ID: ${order.order_id}`);
+      doc.text(`Date: ${order.created_at}`);
+      doc.moveDown();
+
+      // CUSTOMER
+      doc.text(`Customer: ${order.user_Name}`);
+      doc.text(`Mobile: ${order.user_Mobile}`);
+      doc.moveDown();
+
+      // ADDRESS
+      if (address) {
+        doc.text("Delivery Address:");
+        doc.text(address.address);
+        doc.text(`${address.city}, ${address.state} - ${address.pincode}`);
+        doc.moveDown();
+      }
+
+      // ITEMS
+      doc.fontSize(12).text("Items:");
+      doc.moveDown();
+
+      items.forEach(item => {
+        doc.text(
+          `${item.variation_name} (${item.sku}) × ${item.product_Quantity} = ₹${item.product_Total_Amount}`
+        );
+      });
+
+      doc.moveDown();
+      doc.fontSize(13).text(`Total Amount: ₹${order.total_amount}`, {
+        align: "right"
+      });
+
+      doc.end();
+
+      stream.on("finish", () => resolve(fileName));
+      stream.on("error", err => reject(err));
+
+    } catch (err) {
+      reject(err);
     }
-}
+  });
+};
 
-// Patrol unit list
-exports.patrolUnitList = async (req, res) => {
-    try {
 
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
 
-        let patrolUnitCondition = `WHERE is_delete = 0 ORDER BY created_at DESC`;
-        let patrolUnitFields = 'patrol_unit_Id, patrol_unit_Name, police_station_Id, patrol_unit_District, patrol_unit_Latitude, patrol_unit_Longitude, is_active';
+exports.downloadInvoice = async (req, res) => {
+  try {
+    const orderId = req.params.orderId;
 
-        const patrolUnitData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'patrol_unit', patrolUnitCondition, patrolUnitFields);
+    const order = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `WHERE order_id=${orderId}`,
+      "invoice_file, order_status"
+    );
 
-        if (patrolUnitData.length > 0) {
-
-            for (let data of patrolUnitData) {
-                let condition = `WHERE police_station_Id = ${data?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-                let selectFields = 'police_station_Name, is_District';
-
-                const getPoliceStation = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', condition, selectFields);
-
-                data.police_station = getPoliceStation?.police_station_Name || "";
-                data.is_District = getPoliceStation?.is_District;
-            }
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = patrolUnitData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
+    if (!order || !order.invoice_file) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Invoice not available."
+      });
     }
-}
 
-// Police officer list
-exports.policeOfficerList = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-
-        let policeOfficerCondition = `WHERE is_delete = 0 ORDER BY created_at DESC`;
-        let policeOfficerFields = 'police_officer_Id , police_officer_Name, police_officer_BadgeNumber , police_officer_Rank, police_officer_Role, police_officer_Phone, police_station_Id, patrol_unit_Id, police_officer_profile_Picture, is_active';
-
-        const policeOfficerData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'police_officer', policeOfficerCondition, policeOfficerFields);
-
-        if (policeOfficerData.length > 0) {
-
-            for (let data of policeOfficerData) {
-
-                let condition = `WHERE police_station_Id = ${data?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-                let selectFields = 'police_station_Name';
-
-                const getPoliceStation = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', condition, selectFields);
-
-                data.police_station = getPoliceStation.police_station_Name || "";
-
-                let patrolUnitCondition = `WHERE patrol_unit_Id = ${data?.patrol_unit_Id} AND is_active = 1 AND is_delete = 0`;
-                let patrolUnitFields = 'patrol_unit_Name';
-
-                const patrolUnitData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', patrolUnitCondition, patrolUnitFields);
-
-                data.patrol_unit = patrolUnitData.patrol_unit_Name || "";
-
-                if (data.police_officer_profile_Picture && data.police_officer_profile_Picture !== null) {
-                    data.police_officer_profile_Picture = constants.vals.frontEndUserProfilePath + data.police_officer_profile_Picture;
-                }
-            }
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = policeOfficerData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
+    if (!["accepted", "pickup", "delivered"].includes(order.order_status)) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Invoice not allowed."
+      });
     }
-}
 
-// View police officer by id
-exports.policeOfficerView = async (req, res) => {
-    try {
+    const filePath = path.join(
+      __dirname,
+      "../Assets/uploads/invoices",
+      order.invoice_file
+    );
 
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
+    return res.download(filePath);
 
-        let condition = `WHERE police_officer_Id = ${bodyData?.police_officer_Id} AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'police_officer_Name, police_officer_BadgeNumber , police_officer_Rank, police_officer_Role, police_officer_Phone, police_station_Id, patrol_unit_Id, is_active';
+  } catch (err) {
+    console.error("Download Invoice Error:", err);
+    throw err;
+  }
+};
 
-        const checkPoliceOfficer = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_officer', condition, selectFields);
 
-        if (Array.isArray(checkPoliceOfficer) && checkPoliceOfficer.length == 0) {
-            response['status'] = 'error';
-            response['msg'] = 'Police officer is not available in our system.';
-            return utility.apiResponse(req, res, response);
-        } else {
 
-            let policeStationCondition = `WHERE police_station_Id = ${checkPoliceOfficer?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-            let policeStationFields = 'police_station_Name, is_District';
-
-            const policeStationData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', policeStationCondition, policeStationFields);
-
-            checkPoliceOfficer.police_station = policeStationData?.police_station_Name || "";
-            checkPoliceOfficer.is_District = policeStationData?.is_District;
-
-            let patrolUnitCondition = `WHERE patrol_unit_Id = ${checkPoliceOfficer?.patrol_unit_Id} AND is_active = 1 AND is_delete = 0`;
-            let parolUnitFields = 'patrol_unit_Name';
-
-            const patrolUnitData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', patrolUnitCondition, parolUnitFields);
-
-            checkPoliceOfficer.patrol_unit = patrolUnitData?.patrol_unit_Name || "";
-
-            response['status'] = 'success';
-            response['msg'] = 'Request has been completed successfully.';
-            response['data'] = checkPoliceOfficer;
-            return utility.apiResponse(req, res, response);
-        }
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-
-
-
-// Edit patrol unit
-exports.editPatrolUnit = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let messages = {
-            patrol_unit_Name: 'Patrol unit name is required.',
-            police_station_Id: 'Police station is required.'
-        }
-
-        for (key in bodyData) {
-            if (utility.checkEmptyString(bodyData[key])) {
-                response['msg'] = messages[key];
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        let condition = `WHERE patrol_unit_Id = ${bodyData?.patrol_unit_Id} AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'patrol_unit_Id';
-
-        const checkPatrolUnit = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', condition, selectFields);
-
-        if (Array.isArray(checkPatrolUnit) && checkPatrolUnit.length == 0) {
-            response['status'] = 'error';
-            response['msg'] = 'Patrol unit is not available in our system.';
-            return utility.apiResponse(req, res, response);
-        } else {
-
-            const date = req.locals.now;
-            const newValue = `patrol_unit_Name = '${bodyData?.patrol_unit_Name}', police_station_Id = ${bodyData?.police_station_Id}, patrol_unit_District = '${bodyData?.patrol_unit_District}', patrol_unit_Latitude = ${bodyData?.patrol_unit_Latitude}, patrol_unit_Longitude = ${bodyData?.patrol_unit_Longitude}, updated_at = '${date}'`;
-            const condition = `patrol_unit_Id = ${bodyData?.patrol_unit_Id}`;
-
-            await dbQuery.updateRecord(constants.vals.defaultDB, 'patrol_unit', condition, newValue);
-
-            response['status'] = 'success';
-            response['msg'] = 'Patrol unit has been updated successfully.';
-            return utility.apiResponse(req, res, response);
-        }
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Edit police station
-exports.editPoliceStation = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let messages = {
-            police_station_Name: 'Police station name is required.',
-            police_station_Area: 'Police station area is required.',
-            selected_District: 'District is required.',
-            police_station_latitude: 'Patrol station latitude is required.',
-            police_station_longitude: 'Police station longitude is required.'
-        }
-
-        for (key in bodyData) {
-            if (utility.checkEmptyString(bodyData[key])) {
-                response['msg'] = messages[key];
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        let condition = `WHERE police_station_Id = ${bodyData?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'police_station_Id';
-
-        const checkPoliceStation = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', condition, selectFields);
-
-        if (Array.isArray(checkPoliceStation) && checkPoliceStation.length == 0) {
-            response['status'] = 'error';
-            response['msg'] = 'Police Station is not available in our system.';
-            return utility.apiResponse(req, res, response);
-        } else {
-
-            const date = req.locals.now;
-            const newValue = `police_station_Name = '${bodyData?.police_station_Name}', police_station_Area = '${bodyData?.police_station_Area}', police_station_District = '${bodyData?.selected_District}', police_station_latitude = ${bodyData?.police_station_latitude}, police_station_longitude = ${bodyData?.police_station_longitude}, police_station_phone = ${bodyData?.police_station_phone}, is_District = ${bodyData?.is_District ? 1 : 0}, updated_at = '${date}'`;
-            const condition = `police_station_Id = ${bodyData?.police_station_Id}`;
-
-            await dbQuery.updateRecord(constants.vals.defaultDB, 'police_station', condition, newValue);
-
-            response['status'] = 'success';
-            response['msg'] = 'Police station has been updated successfully.';
-            return utility.apiResponse(req, res, response);
-        }
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-
-// Get police request list
-exports.policeRequestList = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-        let itemsPerPage = bodyData?.items_per_page || 10;
-        let currentPage = bodyData?.current_page || 1;
-        const offset = (currentPage - 1) * itemsPerPage;
-
-        let policeRequestCondition = "";
-
-        if (!utility.checkEmptyString(bodyData['date_from']) && !utility.checkEmptyString(bodyData['date_to'])) {
-            if (bodyData?.police_request_Status === 'Accepted') {
-                policeRequestCondition = `AND (pr.police_request_Status = '${bodyData?.police_request_Status}' OR pr.police_request_Status = 'Pending Report') AND DATE(pr.created_at) >= '${bodyData?.date_from}' AND DATE(pr.created_at) <= '${bodyData?.date_to}'`;
-            } else {
-                policeRequestCondition = `AND pr.police_request_Status = '${bodyData?.police_request_Status}' AND DATE(pr.created_at) >= '${bodyData?.date_from}' AND DATE(pr.created_at) <= '${bodyData?.date_to}'`;
-            }
-        } else {
-            if (bodyData?.police_request_Status === 'Accepted') {
-                policeRequestCondition = `AND (pr.police_request_Status = '${bodyData?.police_request_Status}' OR pr.police_request_Status = 'Pending Report')`;
-            } else {
-                policeRequestCondition = `AND pr.police_request_Status = '${bodyData?.police_request_Status}'`;
-            }
-        }
-
-        const requestsData = await dbQuery.getPoliceRequestListForAdmin(constants.vals.defaultDB, policeRequestCondition, itemsPerPage, offset);
-
-        if (requestsData.length > 0) {
-            for (let data of requestsData) {
-                let condition = `WHERE police_request_Id = ${data?.police_request_Id}`;
-                let selectFields = 'crime_report_Id';
-
-                if (data?.camera_Id) {
-                    let cameraFields = 'camera_info_Id, camera_Id, camera_Name, camera_info_event_Id, camera_info_Latitude, camera_info_Longitude';
-                    let cameraCondition = `WHERE camera_info_Id = ${data?.camera_Id}`;
-
-                    const cameraData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'camera_info', cameraCondition, cameraFields);
-
-                    data.cameraDetail = cameraData;
-                }
-
-                const getCrimeReport = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'crime_report', condition, selectFields);
-
-                if (Array.isArray(getCrimeReport) && getCrimeReport.length == 0) {
-                    data.prank_call = false;
-                } else {
-                    data.prank_call = true;
-                }
-            }
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = requestsData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Delete police station
-exports.deletePoliceStation = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let condition = `WHERE police_station_Id = ${bodyData?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'police_station_Id';
-
-        const checkPoliceStation = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_station', condition, selectFields);
-
-        if (Array.isArray(checkPoliceStation) && checkPoliceStation.length == 0) {
-            response['status'] = 'error';
-            response['msg'] = 'Police Station is not available in our system.';
-            return utility.apiResponse(req, res, response);
-        } else {
-            let condition = `WHERE police_station_Id = ${bodyData?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-            let selectFields = 'patrol_unit_Id';
-
-            const checkPatrolUnit = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', condition, selectFields);
-
-            if (Array.isArray(checkPatrolUnit) && checkPatrolUnit.length == 0) {
-                const date = req.locals.now;
-                const newValue = `is_delete = 1, deleted_at = '${date}'`;
-                const condition = `police_station_Id = ${bodyData?.police_station_Id}`;
-
-                await dbQuery.updateRecord(constants.vals.defaultDB, 'police_station', condition, newValue);
-
-                response['status'] = 'success';
-                response['msg'] = 'Police station has been deleted successfully.';
-                return utility.apiResponse(req, res, response);
-            } else {
-                response['status'] = 'error';
-                response['msg'] = 'This police station cannot be deleted as it has patrol units.';
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Delete patrol unit
-exports.deletePatrolUnit = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let condition = `WHERE patrol_unit_Id = ${bodyData?.patrol_unit_Id} AND is_active = 1 AND is_delete = 0`;
-        let selectFields = 'patrol_unit_Id';
-
-        const checkPatrolUnit = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', condition, selectFields);
-
-        if (Array.isArray(checkPatrolUnit) && checkPatrolUnit.length == 0) {
-            response['status'] = 'error';
-            response['msg'] = 'Patrol unit is not available in our system.';
-            return utility.apiResponse(req, res, response);
-        } else {
-            let condition = `WHERE patrol_unit_Id = ${bodyData?.patrol_unit_Id} AND is_active = 1 AND is_delete = 0`;
-            let selectFields = 'police_officer_Id';
-
-            const checkPoliceRequest = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_officer', condition, selectFields);
-
-            if (Array.isArray(checkPoliceRequest) && checkPoliceRequest.length == 0) {
-                let condition = `WHERE assigned_patrol_Id = ${bodyData?.patrol_unit_Id} AND police_request_Status = 'Accepted' AND is_active = 1 AND is_delete = 0`;
-                let selectFields = 'police_request_Id';
-
-                const checkPoliceRequest = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'police_request', condition, selectFields);
-
-                if (Array.isArray(checkPoliceRequest) && checkPoliceRequest.length == 0) {
-                    const date = req.locals.now;
-                    const newValue = `is_delete = 1, deleted_at = '${date}'`;
-                    const condition = `patrol_unit_Id = ${bodyData?.patrol_unit_Id}`;
-
-                    await dbQuery.updateRecord(constants.vals.defaultDB, 'patrol_unit', condition, newValue);
-
-                    response['status'] = 'success';
-                    response['msg'] = 'Patrol unit has been deleted successfully.';
-                    return utility.apiResponse(req, res, response);
-                } else {
-                    response['status'] = 'error';
-                    response['msg'] = 'This patrol unit cannot be deleted as it has accepted police request.';
-                    return utility.apiResponse(req, res, response);
-                }
-            } else {
-                response['status'] = 'error';
-                response['msg'] = 'This patrol unit cannot be deleted as it has assigned to police officer.';
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-
-
-
-// Get today's incidents
-exports.todayPoliceRequestList = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req?.body?.inputdata;
-
-        let policeRequestCondition = `WHERE DATE(created_at) = '${bodyData.date}' AND is_active = 1 AND is_delete = 0 ORDER BY created_at DESC`;
-        let policeRequestFields = 'police_request_Id, user_Id, police_request_Type, police_request_Reason, police_request_Latitude, police_request_Longitude, police_request_Status, assigned_patrol_Id, created_at, camera_Id';
-
-        const policeRequestData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'police_request', policeRequestCondition, policeRequestFields);
-
-        if (policeRequestData.length > 0) {
-            for (let data of policeRequestData) {
-
-                let userCondition = `WHERE user_Id = ${data?.user_Id}`;
-                let userFields = 'user_Name, user_Gender, user_business_Name';
-                const userData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'user', userCondition, userFields);
-                data.user = userData;
-
-                if (data?.camera_Id) {
-                    let cameraFields = 'camera_info_Id, camera_Id, camera_Name, camera_info_event_Id, camera_info_Latitude, camera_info_Longitude';
-                    let cameraCondition = `WHERE camera_info_Id = ${data?.camera_Id}`;
-
-                    const cameraData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'camera_info', cameraCondition, cameraFields);
-
-                    data.cameraDetail = cameraData;
-                }
-
-                if (data.assigned_patrol_Id !== null) {
-                    let patrolUnitCondition = `WHERE patrol_unit_Id = ${data?.assigned_patrol_Id}`;
-                    let patrolUnitFields = 'patrol_unit_Name';
-                    const patrolUnitData = await dbQuery.fetchSingleRecord(constants.vals.defaultDB, 'patrol_unit', patrolUnitCondition, patrolUnitFields);
-                    data.patrol_unit = patrolUnitData;
-                }
-            }
-        }
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = policeRequestData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-// Patrol unit list by police station id
-exports.patrolUnitListByPoliceStation = async (req, res) => {
-    try {
-
-        let response = {};
-        response['status'] = 'error';
-        response['msg'] = '';
-        let bodyData = req.body.inputdata;
-
-        let patrolUnitCondition = `WHERE police_station_Id = ${bodyData?.police_station_Id} AND is_active = 1 AND is_delete = 0`;
-        let patrolUnitFields = 'patrol_unit_Id, patrol_unit_Name';
-
-        const patrolUnitData = await dbQuery.fetchRecords(constants.vals.defaultDB, 'patrol_unit', patrolUnitCondition, patrolUnitFields);
-
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = patrolUnitData;
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Get sms payload
-exports.smsPayload = async (req, res) => {
-    try {
-
-        const configData = fs.readFileSync(configPath, "utf-8");
-        const config = JSON.parse(configData);
-
-        let response = {};
-        response['status'] = 'success';
-        response['msg'] = 'Request has been completed successfully.';
-        response['data'] = config;
-
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
-
-// Edit sms payload
-exports.editSmsPayload = async (req, res) => {
-    try {
-
-        let bodyData = req?.body?.inputdata;
-
-        let messages = {
-            key: 'Key is required.',
-            sender: 'Sender is required.',
-            text: 'Text is required.'
-        }
-
-        for (item in messages) {
-            if (utility.checkEmptyString(bodyData[item])) {
-                response['msg'] = messages[item];
-                return utility.apiResponse(req, res, response);
-            }
-        }
-
-        const { key, sender, text } = bodyData;
-
-        const newConfig = { key, sender, text };
-
-        console.log('newConfig', newConfig);
-
-        fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2));
-
-        let response = {};
-        response['status'] = 'success111';
-        // response['msg'] = 'Request has been completed successfully.';
-        response['data'] = newConfig;
-
-        return utility.apiResponse(req, res, response);
-
-    } catch (error) {
-        throw error;
-    }
-}
