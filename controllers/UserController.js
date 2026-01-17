@@ -12,6 +12,8 @@ const axios = require("axios");
 const FIREBASE_API_KEY = "AIzaSyDVPHjZwCXmiMVUps0MucNzYko9a-AGcWQ";
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const { delhiveryRequest } = require("../config/delhivery");
+
 
 const razorpay = new Razorpay({
   key_id: "rzp_test_xxxxxxxxxx",        // 👈 YOUR KEY ID
@@ -2559,3 +2561,104 @@ async function calculateCartWithOffers(userId) {
         nonOfferSubtotal
     };
 }
+exports.trackOrder = async (req, res) => {
+  let { waybill } = req.body.inputdata;
+
+  const resp = await delhiveryRequest.get(
+    `https://staging-express.delhivery.com/api/v1/packages/json/?waybill=${waybill}`
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    data: resp.data
+  });
+};
+exports.requestReturn = async (req, res) => {
+  let user = req.userInfo;
+  let { order_id, reason } = req.body.inputdata;
+
+  const order = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `
+    WHERE order_id=${order_id}
+      AND user_id=${user.user_id}
+      AND order_status='delivered'
+    `,
+    "order_id"
+  );
+
+  if (!order) {
+    return utility.apiResponse(req, res, {
+      status: "error",
+      msg: "Return not allowed for this order"
+    });
+  }
+
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `order_id=${order_id}`,
+    `
+    return_status='requested',
+    return_reason='${reason}',
+    updated_at='${req.locals.now}'
+    `
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Return request submitted"
+  });
+};
+
+exports.getDeliveryEstimate = async (req, res) => {
+  let { origin_pin, destination_pin } = req.body.inputdata;
+
+  const resp = await delhiveryRequest.get(
+    `https://express-dev-test.delhivery.com/api/dc/expected_tat`,
+    {
+      params: {
+        origin_pin,
+        destination_pin,
+        mot: "S",
+        pdt: "B2C",
+        expected_pickup_date: new Date().toISOString().split("T")[0]
+      }
+    }
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    data: resp.data
+  });
+};
+
+
+exports.checkPincode = async (req, res) => {
+  try {
+    let { pincode } = req.body.inputdata;
+
+    const resp = await delhiveryRequest.get(
+      `https://staging-express.delhivery.com/c/api/pin-codes/json/?filter_codes=${pincode}`
+    );
+
+    const data = resp.data?.delivery_codes?.[0]?.postal_code;
+
+    if (!data || data.pre_paid !== "Y") {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Delivery not available"
+      });
+    }
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Delivery available",
+      data
+    });
+
+  } catch (err) {
+    throw err;
+  }
+};

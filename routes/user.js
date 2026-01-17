@@ -1,6 +1,6 @@
 var express = require("express");
 var apiMiddleware = require("../middlewares/api");
-const {verifyPayment,cancelOrder, userRegister,userListCategory,userFilterProducts,userAddProductReview,userListSubCategoryByCategoryId,userListSubCategory,userHomeProductList,userAllProducts,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPhoneVerify, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, userOtpVerify, userResendOtp } = require("../controllers/UserController");
+const {requestReturn,trackOrder,getDeliveryEstimate,checkPincode,verifyPayment,cancelOrder, userRegister,userListCategory,userFilterProducts,userAddProductReview,userListSubCategoryByCategoryId,userListSubCategory,userHomeProductList,userAllProducts,getMyCommission, withdrawWallet, getWalletBalance,getCartTotal,placeOrder,getOrderList,getOrderDetails,applyCoupon,addToCart,getCart,updateCartQuantity, removeCart,addWishlist,getWishlist,removeWishlist, addUserAddress, editUserAddress, deleteUserAddress, userAddressList, userPhoneVerify, getUserDetails, userLogout, userProfileUpdate, userAccountDelete, userPoliceRequestCount, userProfilePictureChange, userOtpVerify, userResendOtp } = require("../controllers/UserController");
 const { authentication } = require('../middlewares/authentication');
 const FileManager = require("../helpers/file_manager");
 
@@ -60,9 +60,15 @@ app.use("/withdraw_wallet", apiMiddleware, authentication, withdrawWallet);
 app.use("/get_my_commission", apiMiddleware, authentication, getMyCommission);
 
 //
+app.use("/request_return", apiMiddleware, authentication, requestReturn);
+//
 app.use("/place_order", apiMiddleware, authentication, placeOrder);
-
-
+//
+app.use("/track_order", apiMiddleware, authentication, trackOrder);
+//
+app.use("/get_delivery_estimate", apiMiddleware, authentication, getDeliveryEstimate);
+//
+app.use("/check_pincode", apiMiddleware, authentication, checkPincode);
 //
 app.use("/verify_payment", apiMiddleware, authentication, verifyPayment);
 

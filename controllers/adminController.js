@@ -2408,7 +2408,217 @@ exports.approveWithdraw = async (req, res) => {
         throw err;
     }
 };
+exports.cancelShipment = async (req, res) => {
+  let { waybill } = req.body.inputdata;
 
+  await delhiveryRequest.post(
+    "https://staging-express.delhivery.com/api/p/edit",
+    {
+      waybill,
+      cancellation: true
+    }
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Shipment cancelled"
+  });
+};
+exports.approveReturn = async (req, res) => {
+  try {
+    let { order_id } = req.body.inputdata;
+
+    // 1️⃣ Approve return
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `
+      order_id=${order_id}
+      AND return_status='requested'
+      `,
+      `
+      return_status='approved',
+      updated_at='${req.locals.now}'
+      `
+    );
+
+    // 2️⃣ 🔥 AUTO CREATE RETURN SHIPMENT
+    await createReturnShipmentInternal(order_id);
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Return approved & pickup scheduled"
+    });
+
+  } catch (err) {
+    console.error("Approve Return Error:", err);
+    return utility.apiResponse(req, res, {
+      status: "error",
+      msg: "Failed to approve return"
+    });
+  }
+};
+const createReturnShipmentInternal = async (order_id) => {
+  const order = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    `
+    user_orders o
+    JOIN user_addresses a ON o.address_id=a.address_id
+    JOIN users u ON o.user_id=u.user_id
+    `,
+    `
+    WHERE o.order_id=${order_id}
+      AND o.return_status='approved'
+      AND o.order_status='delivered'
+    `,
+    `
+    o.order_id,
+    o.total_amount,
+    a.address,
+    a.city,
+    a.state,
+    a.pincode,
+    u.user_Name,
+    u.user_Mobile
+    `
+  );
+
+  if (!order) return;
+
+  const payload = {
+    shipments: [
+      {
+        name: order.user_Name,
+        add: order.address,
+        pin: order.pincode,
+        city: order.city,
+        state: order.state,
+        country: "India",
+        phone: order.user_Mobile,
+
+        order: `RET-${order.order_id}`,
+        payment_mode: "Prepaid",
+        total_amount: order.total_amount,
+
+        shipment_width: "20",
+        shipment_height: "10",
+        weight: "1",
+        shipping_mode: "Surface",
+
+        return_pin: "122003",
+        return_city: "Gurugram",
+        return_state: "Haryana",
+        return_country: "India",
+        return_phone: "9999999999",
+        return_add: "Warehouse Address"
+      }
+    ],
+    pickup_location: {
+      name: "warehouse_name"
+    }
+  };
+
+  const resp = await delhiveryRequest.post(
+    "https://staging-express.delhivery.com/api/cmu/create.json",
+    `format=json&data=${JSON.stringify(payload)}`
+  );
+
+  const waybill = resp?.data?.packages?.[0]?.waybill;
+
+  if (waybill) {
+    await dbQuery.updateRecord(
+      constants.vals.defaultDB,
+      "user_orders",
+      `order_id=${order_id}`,
+      `
+      return_waybill='${waybill}',
+      return_status='pickup_scheduled',
+      updated_at='${new Date().toISOString().slice(0, 19).replace("T", " ")}'
+      `
+    );
+  }
+};
+
+
+exports.rejectReturn = async (req, res) => {
+  let { order_id, reason } = req.body.inputdata;
+
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `
+    order_id=${order_id}
+    AND return_status='requested'
+    `,
+    `
+    return_status='rejected',
+    return_reject_reason='${reason}',
+    updated_at='${req.locals.now}'
+    `
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Return rejected"
+  });
+};
+
+exports.createShipment = async (req, res) => {
+  let { order_id } = req.body.inputdata;
+
+  const order = await dbQuery.fetchSingleRecord(
+    constants.vals.defaultDB,
+    "user_orders o JOIN user_addresses a ON o.address=a.address_id",
+    `WHERE o.order_id=${order_id}`,
+    "o.*, a.*"
+  );
+
+  const payload = {
+    shipments: [{
+      name: order.user_Name,
+      add: order.address,
+      pin: order.pincode,
+      city: order.city,
+      state: order.state,
+      country: "India",
+      phone: order.mobile,
+      order: `ORD-${order.order_id}`,
+      payment_mode: order.payment_mode === "COD" ? "COD" : "Prepaid",
+      total_amount: order.total_amount,
+      shipment_width: "20",
+      shipment_height: "10",
+      weight: "1",
+      shipping_mode: "Surface"
+    }],
+    pickup_location: {
+      name: "warehouse_name"
+    }
+  };
+
+  const resp = await delhiveryRequest.post(
+    "https://staging-express.delhivery.com/api/cmu/create.json",
+    `format=json&data=${JSON.stringify(payload)}`
+  );
+
+  const waybill = resp.data?.packages?.[0]?.waybill;
+
+  await dbQuery.updateRecord(
+    constants.vals.defaultDB,
+    "user_orders",
+    `order_id=${order_id}`,
+    `
+    courier_partner='Delhivery',
+    waybill='${waybill}',
+    courier_status='shipment_created'
+    `
+  );
+
+  return utility.apiResponse(req, res, {
+    status: "success",
+    msg: "Shipment created",
+    data: { waybill }
+  });
+};
 
 exports.rejectWithdraw = async (req, res) => {
     try {

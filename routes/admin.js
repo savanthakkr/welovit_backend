@@ -27,10 +27,12 @@ const {
     listCategory,
     updateProduct,
     deleteProduct,
+    cancelShipment,
     getProductDetails,
     listProduct,
     uploadProductImages,
     deleteProductImage,
+    rejectReturn,approveReturn,
     addProduct,
     listSubCategory,
     listSubCategoryByCategoryId,
@@ -44,6 +46,7 @@ const {
     addAdmin,
     adminList,
     updateAdmin,
+    createShipment,
     logout,
     deleteAdmin,
     adminMarkPickup,
@@ -132,6 +135,10 @@ app.use(
 app.use("/admin/delete_product_image", apiMiddleware, adminAuthentication, deleteProductImage);
 
 // Coupons & Offers & Wallet
+app.use("/approve_return", apiMiddleware, adminAuthentication, approveReturn);
+app.use("/reject_return", apiMiddleware, adminAuthentication, rejectReturn);
+app.use("/create_shipment", apiMiddleware, adminAuthentication, createShipment);
+app.use("/cancel_shipment", apiMiddleware, adminAuthentication, cancelShipment);
 app.use("/add_coupon", apiMiddleware, adminAuthentication, addCoupon);
 app.use("/list_coupons", apiMiddleware, adminAuthentication, listCoupons);
 app.use("/admin_mark_pickup", apiMiddleware, adminAuthentication, adminMarkPickup);
