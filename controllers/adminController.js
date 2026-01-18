@@ -1638,31 +1638,24 @@ exports.getProductDetails = async (req, res) => {
       });
     }
 
-    // ✅ IMAGES (SAFE)
+    // ✅ PRODUCT IMAGES (NO variation_id)
     const imagesRows = await dbQuery.fetchRecords(
       constants.vals.defaultDB,
       "product_images",
-      `WHERE product_id=${product_id} AND variation_id IS NULL AND is_delete=0`,
+      `WHERE product_id=${product_id} AND is_delete=0`,
       "product_image_id, imageUrl"
     );
 
-    // ✅ VARIATIONS (SAFE)
+    // ✅ VARIATIONS (NO images)
     const variationsRows = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
-      SELECT 
-        v.*,
-        (
-          SELECT JSON_ARRAYAGG(imageUrl)
-          FROM product_images pi
-          WHERE pi.variation_id=v.variation_id AND pi.is_delete=0
-        ) AS images
-      FROM product_variations v
-      WHERE v.product_id=${product_id} AND v.is_delete=0
+      SELECT *
+      FROM product_variations
+      WHERE product_id=${product_id} AND is_delete=0
       `
     );
 
-    // 🔥 IMPORTANT: FORCE ARRAY
     product.images = Array.isArray(imagesRows) ? imagesRows : [];
     product.variations = Array.isArray(variationsRows) ? variationsRows : [];
 
@@ -1677,6 +1670,7 @@ exports.getProductDetails = async (req, res) => {
     throw err;
   }
 };
+
 
 
 
