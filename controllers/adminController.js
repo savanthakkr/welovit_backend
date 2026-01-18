@@ -1627,7 +1627,7 @@ exports.getProductDetails = async (req, res) => {
     const product = await dbQuery.fetchSingleRecord(
       constants.vals.defaultDB,
       "products",
-      `WHERE product_id=${product_id} AND is_delete=0`,
+      `WHERE product_id=${product_id}`,
       "*"
     );
 
@@ -1638,21 +1638,19 @@ exports.getProductDetails = async (req, res) => {
       });
     }
 
-    // ✅ PRODUCT IMAGES (NO variation_id)
     const imagesRows = await dbQuery.fetchRecords(
       constants.vals.defaultDB,
       "product_images",
-      `WHERE product_id=${product_id} AND is_delete=0`,
+      `WHERE product_id=${product_id}`,
       "product_image_id, imageUrl"
     );
 
-    // ✅ VARIATIONS (NO images)
     const variationsRows = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
       SELECT *
       FROM product_variations
-      WHERE product_id=${product_id} AND is_delete=0
+      WHERE product_id=${product_id}
       `
     );
 
@@ -1670,6 +1668,8 @@ exports.getProductDetails = async (req, res) => {
     throw err;
   }
 };
+
+
 
 
 

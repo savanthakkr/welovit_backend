@@ -36,9 +36,12 @@ const io = new Server(server, {
 });
 
 app.use((req, res, next) => {
-	req.io = io;
-	next();
+  if (req.is("multipart/form-data")) {
+    return next();
+  }
+  express.json({ limit: "50mb" })(req, res, next);
 });
+
 
 setupSocket(io);
 
