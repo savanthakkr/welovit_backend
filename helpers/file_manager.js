@@ -35,7 +35,12 @@ exports.resolvePath = (filepath) => {
 exports.userUploadImage = (folderName) => {
 
     const storage = multer.memoryStorage();
-    const upload = multer({ storage }).any();
+    const upload = multer({
+        storage,
+        limits: {
+            fileSize: 5 * 1024 * 1024 // 5 MB per file
+        }
+    }).any();
     let response = {};
     response['status'] = 'error';
     response['msg'] = '';

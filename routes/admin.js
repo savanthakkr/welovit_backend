@@ -126,11 +126,11 @@ app.use("/admin/delete_product", apiMiddleware, adminAuthentication, deleteProdu
 app.use("/admin/get_product_details", apiMiddleware, adminAuthentication, getProductDetails);
 app.use("/admin/list_product", apiMiddleware, adminAuthentication, listProduct);
 app.use(
-    "/admin/upload_product_image",
-    apiMiddleware,
-    adminAuthentication,
-    FileManager.userUploadImage('/Products/'),
-    uploadProductImages
+  "/admin/upload_product_image",
+  apiMiddleware,
+  adminAuthentication,
+  FileManager.userUploadImage('/Products/'),
+  uploadProductImages
 );
 app.use("/admin/delete_product_image", apiMiddleware, adminAuthentication, deleteProductImage);
 
