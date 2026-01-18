@@ -1638,16 +1638,16 @@ exports.getProductDetails = async (req, res) => {
       });
     }
 
-    // Product images
-    const images = await dbQuery.fetchRecords(
+    // ✅ IMAGES (SAFE)
+    const imagesRows = await dbQuery.fetchRecords(
       constants.vals.defaultDB,
       "product_images",
       `WHERE product_id=${product_id} AND variation_id IS NULL AND is_delete=0`,
       "product_image_id, imageUrl"
     );
 
-    // Variations
-    const variations = await dbQuery.rawQuery(
+    // ✅ VARIATIONS (SAFE)
+    const variationsRows = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
       SELECT 
@@ -1662,8 +1662,9 @@ exports.getProductDetails = async (req, res) => {
       `
     );
 
-    product.images = images;
-    product.variations = variations;
+    // 🔥 IMPORTANT: FORCE ARRAY
+    product.images = Array.isArray(imagesRows) ? imagesRows : [];
+    product.variations = Array.isArray(variationsRows) ? variationsRows : [];
 
     return utility.apiResponse(req, res, {
       status: "success",
@@ -1671,8 +1672,12 @@ exports.getProductDetails = async (req, res) => {
       data: product
     });
 
-  } catch (err) { throw err; }
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
 };
+
 
 
 
@@ -2760,82 +2765,91 @@ exports.getAllOrders = async (req, res) => {
 };
 // ADMIN ORDER DETAILS
 exports.getOrderDetails = async (req, res) => {
-    try {
-        let body = req.body.inputdata;
+  try {
+    let { order_id } = req.body.inputdata;
 
-        if (!body.order_id) {
-            return utility.apiResponse(req, res, {
-                status: "error",
-                msg: "Order ID required."
-            });
-        }
-
-        // ORDER + USER
-        let order = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `
-            SELECT 
-                o.*,
-                u.user_Name,
-                u.user_Mobile
-            FROM user_orders o
-            JOIN users u ON u.user_id = o.user_id
-            WHERE o.order_id=${body.order_id}
-            `
-        );
-
-        if (!order.length) {
-            return utility.apiResponse(req, res, {
-                status: "error",
-                msg: "Order not found."
-            });
-        }
-
-        order = order[0];
-
-        // ITEMS
-        let items = await dbQuery.rawQuery(
-            constants.vals.defaultDB,
-            `
-            SELECT 
-                c.product_Id,
-                c.product_Quantity,
-                c.product_Amount,
-                c.product_Total_Amount,
-                p.product_name,
-                p.product_sale_price,
-                (SELECT imageUrl 
-                 FROM product_images 
-                 WHERE product_id=p.product_id 
-                 LIMIT 1) AS product_image
-            FROM user_carts c
-            JOIN products p ON p.product_id = c.product_Id
-            WHERE c.order_id=${body.order_id}
-            `
-        );
-
-        // ADDRESS (via address_id)
-        let address = null;
-        if (order.address) {
-            address = await dbQuery.fetchSingleRecord(
-                constants.vals.defaultDB,
-                "user_addresses",
-                `WHERE address_id=${order.address}`,
-                "*"
-            );
-        }
-
-        return utility.apiResponse(req, res, {
-            status: "success",
-            msg: "Order details fetched successfully.",
-            data: { order, items, address }
-        });
-
-    } catch (err) {
-        console.error(err);
-        throw err;
+    if (!order_id) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Order ID required."
+      });
     }
+
+    // ORDER + USER
+    const order = await dbQuery.fetchSingleRecord(
+      constants.vals.defaultDB,
+      `
+      user_orders o
+      JOIN users u ON u.user_id=o.user_id
+      `,
+      `WHERE o.order_id=${order_id}`,
+      `
+      o.*,
+      u.user_Name,
+      u.user_Mobile
+      `
+    );
+
+    if (!order) {
+      return utility.apiResponse(req, res, {
+        status: "error",
+        msg: "Order not found"
+      });
+    }
+
+    // ITEMS + PRODUCT + VARIATION
+    const items = await dbQuery.rawQuery(
+      constants.vals.defaultDB,
+      `
+      SELECT
+        c.product_Id,
+        c.variation_id,
+
+        p.product_name,
+
+        v.sku,
+        v.price,
+        v.sale_price,
+
+        c.product_Quantity,
+        c.product_Total_Amount,
+
+        (
+          SELECT imageUrl 
+          FROM product_images 
+          WHERE product_id=p.product_id 
+          LIMIT 1
+        ) AS product_image
+      FROM user_carts c
+      JOIN products p ON p.product_id=c.product_Id
+      LEFT JOIN product_variations v ON v.variation_id=c.variation_id
+      WHERE c.order_id=${order_id}
+      `
+    );
+
+    // ADDRESS
+    let address = null;
+    if (order.address) {
+      address = await dbQuery.fetchSingleRecord(
+        constants.vals.defaultDB,
+        "user_addresses",
+        `WHERE address_id=${order.address}`,
+        "*"
+      );
+    }
+
+    return utility.apiResponse(req, res, {
+      status: "success",
+      msg: "Order details fetched",
+      data: { order, items, address }
+    });
+
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
 };
+
 
 
 
