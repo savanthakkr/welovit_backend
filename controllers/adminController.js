@@ -1715,75 +1715,73 @@ exports.listProduct = async (req, res) => {
 
 
 exports.uploadProductImages = async (req, res) => {
-  try {
-    let body = req.body;
-    let admin = req.userInfo;
+    try {
+        let response = { status: "error", msg: "" };
+        let body = req.body;
+        let admin = req.userInfo;
 
-    if (!body.product_id) {
-      return utility.apiResponse(req, res, {
-        status: "error",
-        msg: "Product ID is required."
-      });
-    }
-
-    // Ownership check
-    let product = await dbQuery.fetchSingleRecord(
-      constants.vals.defaultDB,
-      "products",
-      `WHERE product_id=${body.product_id} AND is_delete=0`,
-      "product_id, admin_id"
-    );
-
-    if (!product) {
-      return utility.apiResponse(req, res, {
-        status: "error",
-        msg: "Product not found."
-      });
-    }
-
-    if (admin.admin_Type === "admin" && product.admin_id !== admin.admin_Id) {
-      return utility.apiResponse(req, res, {
-        status: "error",
-        msg: "Not allowed."
-      });
-    }
-
-    const images = body.file || [];
-
-    if (!Array.isArray(images) || images.length === 0) {
-      return utility.apiResponse(req, res, {
-        status: "error",
-        msg: "Images required."
-      });
-    }
-
-    for (let img of images) {
-      await dbQuery.insertSingle(
-        constants.vals.defaultDB,
-        "product_images",
-        {
-          product_id: body.product_id,
-          variation_id: body.variation_id || null,
-          imageUrl: img,
-          created_at: req.locals.now
+        // 1️⃣ Validate product_id
+        if (!body.product_id) {
+            response.msg = "Product ID is required.";
+            return utility.apiResponse(req, res, response);
         }
-      );
+
+        // 2️⃣ Images from FileManager (same as addProduct)
+        const productImages = body.file || [];
+
+        if (!Array.isArray(productImages) || productImages.length === 0) {
+            response.msg = "Product images are required.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // 3️⃣ Product ownership check
+        let product = await dbQuery.fetchSingleRecord(
+            constants.vals.defaultDB,
+            "products",
+            `WHERE product_id=${body.product_id} AND is_delete=0`,
+            "product_id, admin_id"
+        );
+
+        if (!product) {
+            response.msg = "Product not found.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        if (admin.admin_Type === "admin" && product.admin_id !== admin.admin_Id) {
+            response.msg = "You are not allowed to upload images for this product.";
+            return utility.apiResponse(req, res, response);
+        }
+
+        // 4️⃣ Save images
+        for (let img of productImages) {
+            await dbQuery.insertSingle(
+                constants.vals.defaultDB,
+                "product_images",
+                {
+                    product_id: body.product_id,
+                    variation_id: body.variation_id || null,
+                    imageUrl: img,
+                    created_at: req.locals.now
+                }
+            );
+        }
+
+        // 5️⃣ Success response
+        response.status = "success";
+        response.msg = "Product images uploaded successfully.";
+        response.data = {
+            product_id: body.product_id,
+            images: productImages
+        };
+
+        return utility.apiResponse(req, res, response);
+
+    } catch (err) {
+        console.error("uploadProductImages error:", err);
+        throw err;
     }
-
-    return utility.apiResponse(req, res, {
-      status: "success",
-      msg: "Images uploaded successfully.",
-      data: {
-        product_id: body.product_id,
-        variation_id: body.variation_id || null,
-        images
-      }
-    });
-
-  } catch (err) {
-    throw err;
-  }
 };
+
 
 
 
