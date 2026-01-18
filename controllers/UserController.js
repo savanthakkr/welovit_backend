@@ -2139,49 +2139,51 @@ exports.userProductDetails = async (req, res) => {
       });
     }
 
-    // PRODUCT
-    const product = await dbQuery.fetchSingleRecord(
+    /* ================= PRODUCT ================= */
+    const productRows = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
-      products p
-      LEFT JOIN categories c ON c.category_id=p.category_id
-      LEFT JOIN sub_categories sc ON sc.sub_category_id=p.sub_category_id
-      `,
-      `WHERE p.product_id=${product_id} AND p.status=1`,
-      `
-      p.product_id,
-      p.product_name,
-      p.product_slug,
-      p.product_description,
-      p.product_base_price,
-      p.product_sale_price,
-      p.product_tags,
-      p.product_review,
-      c.category_id,
-      c.category_Name,
-      sc.sub_category_id,
-      sc.sub_Category_Name
+      SELECT
+        p.product_id,
+        p.product_name,
+        p.product_slug,
+        p.product_description,
+        p.product_base_price,
+        p.product_sale_price,
+        p.product_tags,
+        p.product_review,
+        c.category_id,
+        c.category_Name,
+        sc.sub_category_id,
+        sc.sub_Category_Name
+      FROM products p
+      LEFT JOIN categories c ON c.category_id = p.category_id
+      LEFT JOIN sub_categories sc ON sc.sub_category_id = p.sub_category_id
+      WHERE p.product_id = ${product_id}
+        AND p.status = 1
       `
     );
 
-    if (!product) {
+    if (!productRows || productRows.length === 0) {
       return utility.apiResponse(req, res, {
         status: "error",
         msg: "Product not found"
       });
     }
 
-    // IMAGES
+    const product = productRows[0];
+
+    /* ================= IMAGES ================= */
     const images = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
       SELECT imageUrl
       FROM product_images
-      WHERE product_id=${product_id} AND is_delete=0
+      WHERE product_id = ${product_id}
       `
     );
 
-    // VARIATIONS
+    /* ================= VARIATIONS ================= */
     const variations = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
@@ -2192,11 +2194,11 @@ exports.userProductDetails = async (req, res) => {
         sale_price,
         stock
       FROM product_variations
-      WHERE product_id=${product_id} AND is_delete=0
+      WHERE product_id = ${product_id}
       `
     );
 
-    // ATTRIBUTES (GROUPED)
+    /* ================= ATTRIBUTES ================= */
     const attrRows = await dbQuery.rawQuery(
       constants.vals.defaultDB,
       `
@@ -2205,12 +2207,13 @@ exports.userProductDetails = async (req, res) => {
         a.name AS attribute_name,
         v.value
       FROM product_attribute_values pav
-      JOIN attributes a ON a.attribute_id=pav.attribute_id
-      JOIN attribute_values v ON v.value_id=pav.value_id
-      WHERE pav.product_id=${product_id}
+      JOIN attributes a ON a.attribute_id = pav.attribute_id
+      JOIN attribute_values v ON v.value_id = pav.value_id
+      WHERE pav.product_id = ${product_id}
       `
     );
 
+    /* GROUP ATTRIBUTES */
     const grouped = {};
     for (let r of attrRows) {
       if (!grouped[r.attribute_id]) {
@@ -2223,6 +2226,7 @@ exports.userProductDetails = async (req, res) => {
       grouped[r.attribute_id].values.push(r.value);
     }
 
+    /* ================= RESPONSE ================= */
     return utility.apiResponse(req, res, {
       status: "success",
       msg: "Product fetched",
@@ -2235,9 +2239,11 @@ exports.userProductDetails = async (req, res) => {
     });
 
   } catch (err) {
+    console.error("userProductDetails error:", err);
     throw err;
   }
 };
+
 
 
 exports.userFilterProducts = async (req, res) => {

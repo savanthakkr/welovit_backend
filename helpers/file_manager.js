@@ -34,20 +34,8 @@ exports.resolvePath = (filepath) => {
 
 exports.userUploadImage = (folderName) => {
 
-    const storage = multer.diskStorage({
-        destination: (req, file, cb) => {
-            cb(null, "/root/welovit_node/Assets/uploads/tmp");
-        },
-        filename: (req, file, cb) => {
-            const unique = Date.now() + "-" + Math.round(Math.random() * 1E9);
-            cb(null, unique + path.extname(file.originalname));
-        }
-    });
-
-    const upload = multer({
-        storage,
-        limits: { fileSize: 5 * 1024 * 1024 } // 5MB
-    }).any();
+    const storage = multer.memoryStorage();
+    const upload = multer({ storage }).any();
     let response = {};
     response['status'] = 'error';
     response['msg'] = '';
